@@ -7,6 +7,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Xml.Linq;
 using ScrewCalendar;
 
 var tests = new (string Name, Action Run)[]
@@ -21,7 +22,8 @@ var tests = new (string Name, Action Run)[]
     ("Normal editor formatting toolbar", TestNormalEditorFormattingToolbar),
     ("Archived Markdown images", TestMarkdownImageStore),
     ("Localization keys", TestLocalizationKeys),
-    ("Calendar metadata", TestCalendarMetadata)
+    ("Calendar metadata", TestCalendarMetadata),
+    ("Release metadata", TestReleaseMetadata)
 };
 
 var failures = new List<string>();
@@ -208,6 +210,60 @@ static void TestCalendarMetadata()
     var holiday = metadata.GetHoliday(new DateTime(2026, 10, 1));
     True(holiday is not null && holiday.IsOffDay, "Holiday lookup");
     Equal("秋分", metadata.GetSolarTerm(new DateTime(2026, 9, 23)), "Solar-term lookup");
+}
+
+static void TestReleaseMetadata()
+{
+    var repositoryDirectory = Path.Combine(AppContext.BaseDirectory, "Repository");
+    var project = XDocument.Load(Path.Combine(repositoryDirectory, "ScrewCalendar.csproj"));
+    var version = project.Descendants("Version").SingleOrDefault()?.Value;
+    True(Version.TryParse(version, out var parsedVersion), "Application version must be numeric SemVer");
+    True(parsedVersion is not null && parsedVersion.Major >= 0 && parsedVersion.Minor >= 0 && parsedVersion.Build >= 0,
+        "Application version must contain major, minor, and patch numbers");
+    True(!project.Descendants("AssemblyVersion").Any(), "Assembly version should derive from Version");
+    True(!project.Descendants("FileVersion").Any(), "File version should derive from Version");
+
+    var publishedFiles = project.Descendants("None")
+        .Where(item => item.Attribute("CopyToPublishDirectory") is not null)
+        .Select(item => item.Attribute("Update")?.Value)
+        .Where(item => item is not null)
+        .Select(item => item!)
+        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    True(publishedFiles.Contains("LICENSE"), "Publish includes GPL license");
+    True(publishedFiles.Contains("README.md"), "Publish includes README");
+    True(publishedFiles.Contains("THIRD_PARTY_NOTICES.md"), "Publish includes third-party notices");
+
+    using var sdkDocument = JsonDocument.Parse(File.ReadAllText(Path.Combine(repositoryDirectory, "global.json")));
+    var sdk = sdkDocument.RootElement.GetProperty("sdk");
+    True(Version.TryParse(sdk.GetProperty("version").GetString(), out var sdkVersion) && sdkVersion.Build >= 0,
+        "SDK version must be fully qualified");
+    Equal("latestPatch", sdk.GetProperty("rollForward").GetString(), "SDK roll-forward policy");
+
+    var packageVersions = XDocument.Load(Path.Combine(repositoryDirectory, "Directory.Packages.props"));
+    var markdigVersion = packageVersions.Descendants("PackageVersion")
+        .Single(item => string.Equals(item.Attribute("Include")?.Value, "Markdig", StringComparison.Ordinal))
+        .Attribute("Version")?.Value;
+    True(Version.TryParse(markdigVersion, out _), "Markdig version must be centrally managed");
+    var thirdPartyNotices = File.ReadAllText(Path.Combine(repositoryDirectory, "THIRD_PARTY_NOTICES.md"));
+    True(thirdPartyNotices.Contains($"## Markdig {markdigVersion}", StringComparison.Ordinal),
+        "Third-party notice must match the centrally managed Markdig version");
+    True(!project.Descendants("PackageReference").Any(item => item.Attribute("Version") is not null),
+        "Application package references should use central versions");
+
+    var workflowDirectory = Path.Combine(repositoryDirectory, ".github", "workflows");
+    foreach (var workflowName in new[] { "build.yml", "release.yml" })
+    {
+        var workflow = File.ReadAllText(Path.Combine(workflowDirectory, workflowName));
+        True(workflow.Contains("global-json-file: global.json", StringComparison.Ordinal),
+            $"{workflowName} must use global.json as the SDK source");
+        True(!workflow.Contains("dotnet-version:", StringComparison.Ordinal),
+            $"{workflowName} must not duplicate the SDK version");
+        True(!workflow.Contains("--self-contained", StringComparison.Ordinal) &&
+             !workflow.Contains("-r win-x64", StringComparison.Ordinal),
+            $"{workflowName} must use project publish settings");
+        True(!workflow.Contains("win-x64", StringComparison.Ordinal),
+            $"{workflowName} must derive the runtime identifier from the project");
+    }
 }
 
 static CalendarState ValidState(string markdown) => new()
