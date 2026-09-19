@@ -1,0 +1,8 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <SolidColorBrush x:Key="ToolkitAccentBrush" Color="#0067C0" />
+  <SolidColorBrush x:Key="ToolkitInputOutlineBrush" Color="#D8E0E9" />
+  <SolidColorBrush x:Key="ToolkitInputUnderlineBrush" Color="#5B6775" />
+  <SolidColorBrush x:Key="ToolkitScrollThumbBrush" Color="#AEBCCA" />
+  <SolidColorBrush x:Key="ToolkitScrollThumbHoverBrush" Color="#8FA0B2" />
+</ResourceDictionary>

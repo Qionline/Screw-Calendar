@@ -1,0 +1,57 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <ControlTemplate x:Key="ToolkitRoundedButtonTemplate" TargetType="{x:Type Button}">
+    <Border x:Name="ButtonBorder" CornerRadius="5" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}">
+      <ContentPresenter ContentSource="Content" HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="{TemplateBinding VerticalContentAlignment}" Margin="{TemplateBinding Padding}" />
+    </Border>
+    <ControlTemplate.Triggers>
+      <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="ButtonBorder" Property="BorderBrush" Value="{DynamicResource ToolkitAccentBrush}" /></Trigger>
+    </ControlTemplate.Triggers>
+  </ControlTemplate>
+
+  <ControlTemplate x:Key="ToolkitRoundedButtonNoHoverTemplate" TargetType="{x:Type Button}">
+    <Border CornerRadius="5" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}">
+      <ContentPresenter ContentSource="Content" HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="{TemplateBinding VerticalContentAlignment}" Margin="{TemplateBinding Padding}" />
+    </Border>
+  </ControlTemplate>
+
+  <ControlTemplate x:Key="ToolkitContentOnlyRadioTemplate" TargetType="{x:Type RadioButton}"><ContentPresenter ContentSource="Content" /></ControlTemplate>
+
+  <ControlTemplate x:Key="ToolkitUnderlineTextInputTemplate" TargetType="{x:Type TextBox}">
+    <Grid>
+      <Border x:Name="InputFrame" CornerRadius="6" BorderBrush="{DynamicResource ToolkitInputOutlineBrush}" BorderThickness="1" Background="{TemplateBinding Background}">
+        <ScrollViewer x:Name="PART_ContentHost" Focusable="False" Padding="{TemplateBinding Padding}" HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}" />
+      </Border>
+      <Border x:Name="InputBottomLine" Height="1" Margin="1,0,1,0" VerticalAlignment="Bottom" CornerRadius="0,0,5,5" Background="{DynamicResource ToolkitInputUnderlineBrush}" IsHitTestVisible="False" />
+    </Grid>
+    <ControlTemplate.Triggers>
+      <Trigger Property="IsKeyboardFocusWithin" Value="True"><Setter TargetName="InputBottomLine" Property="Background" Value="{DynamicResource ToolkitAccentBrush}" /></Trigger>
+      <Trigger Property="IsEnabled" Value="False"><Setter TargetName="InputFrame" Property="Opacity" Value="0.62" /><Setter TargetName="InputBottomLine" Property="Opacity" Value="0.62" /></Trigger>
+    </ControlTemplate.Triggers>
+  </ControlTemplate>
+
+  <ControlTemplate x:Key="ToolkitMinimalScrollBarTemplate" TargetType="{x:Type ScrollBar}">
+    <Grid Background="Transparent">
+      <Track x:Name="PART_Track" Orientation="Vertical" IsDirectionReversed="True">
+        <Track.DecreaseRepeatButton><RepeatButton Visibility="Collapsed" Width="0" Height="0" /></Track.DecreaseRepeatButton>
+        <Track.Thumb>
+          <Thumb Width="6" MinHeight="28">
+            <Thumb.Style>
+              <Style TargetType="{x:Type Thumb}">
+                <Setter Property="Background" Value="{DynamicResource ToolkitScrollThumbBrush}" />
+                <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="{x:Type Thumb}"><Border Margin="1,0" CornerRadius="4" Background="{TemplateBinding Background}" /></ControlTemplate></Setter.Value></Setter>
+                <Style.Triggers><Trigger Property="IsMouseOver" Value="True"><Setter Property="Background" Value="{DynamicResource ToolkitScrollThumbHoverBrush}" /></Trigger></Style.Triggers>
+              </Style>
+            </Thumb.Style>
+          </Thumb>
+        </Track.Thumb>
+        <Track.IncreaseRepeatButton><RepeatButton Visibility="Collapsed" Width="0" Height="0" /></Track.IncreaseRepeatButton>
+      </Track>
+    </Grid>
+  </ControlTemplate>
+
+  <Style x:Key="ToolkitMinimalScrollBarStyle" TargetType="{x:Type ScrollBar}">
+    <Setter Property="Width" Value="7" /><Setter Property="MinWidth" Value="7" /><Setter Property="Background" Value="Transparent" />
+    <Setter Property="HorizontalAlignment" Value="Right" /><Setter Property="Margin" Value="8,4,1,4" /><Setter Property="Template" Value="{StaticResource ToolkitMinimalScrollBarTemplate}" />
+  </Style>
+</ResourceDictionary>

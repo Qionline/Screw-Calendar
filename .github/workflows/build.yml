@@ -1,0 +1,35 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore
+        run: dotnet restore .\ScrewCalendar.sln --configfile .\NuGet.Config
+
+      - name: Test
+        run: dotnet run --project .\tests\ScrewCalendar.Tests\ScrewCalendar.Tests.csproj -c Release --no-restore
+
+      - name: Verify formatting
+        run: dotnet format .\ScrewCalendar.sln --verify-no-changes --no-restore
+
+      - name: Build
+        run: dotnet build .\ScrewCalendar.csproj -c Release --no-restore

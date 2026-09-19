@@ -1,0 +1,96 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+
+  <g id="screw-calendar-logo">
+
+    <!-- 外部日历主体 -->
+    <rect x="112" y="170" width="800" height="760" rx="120" fill="#171717"></rect>
+
+    <!-- 顶部深灰区域 -->
+    <path d="
+        M232 170
+        H792
+        A120 120 0 0 1 912 290
+        V395
+        H112
+        V290
+        A120 120 0 0 1 232 170
+        Z
+      " fill="#242424"></path>
+
+    <!-- 加长后的白色日历内页 -->
+    <path d="
+        M248 395
+        H868
+        V678
+        Q868 724 832 754
+        L706 858
+        H248
+        Q188 858 188 798
+        V455
+        Q188 395 248 395
+        Z
+      " fill="#FFFFFF"></path>
+
+    <!-- 左侧顶部竖环 -->
+    <rect x="236" y="92" width="108" height="220" rx="54" fill="#171717"></rect>
+
+    <rect x="262" y="118" width="56" height="168" rx="28" fill="#FFFFFF"></rect>
+
+    <!-- 右侧顶部竖环 -->
+    <rect x="680" y="92" width="108" height="220" rx="54" fill="#171717"></rect>
+
+    <rect x="706" y="118" width="56" height="168" rx="28" fill="#FFFFFF"></rect>
+
+    <!-- 中间十字螺丝：整体缩小 15% -->
+    <g transform="translate(512 320) scale(0.85) translate(-512 -320)">
+
+      <circle cx="512" cy="320" r="116" fill="#171717"></circle>
+
+      <circle cx="512" cy="320" r="92" fill="#FFFFFF"></circle>
+
+      <!-- 十字竖向 -->
+      <rect x="491" y="260" width="42" height="120" rx="20" fill="#171717"></rect>
+
+      <!-- 十字横向 -->
+      <rect x="452" y="299" width="120" height="42" rx="20" fill="#171717"></rect>
+
+    </g>
+
+    <!-- 第一排灰色日期块 -->
+    <g fill="#D6D6D6">
+
+      <rect x="242" y="448" width="132" height="108" rx="18"></rect>
+
+      <rect x="406" y="448" width="132" height="108" rx="18"></rect>
+
+      <rect x="570" y="448" width="132" height="108" rx="18"></rect>
+
+      <rect x="734" y="448" width="108" height="108" rx="18"></rect>
+
+      <!-- 第二排 -->
+
+      <rect x="242" y="582" width="132" height="108" rx="18"></rect>
+
+      <rect x="406" y="582" width="132" height="108" rx="18"></rect>
+
+      <rect x="734" y="582" width="108" height="108" rx="18"></rect>
+
+      <!-- 第三排 -->
+
+      <rect x="242" y="716" width="132" height="92" rx="18"></rect>
+
+      <rect x="406" y="716" width="132" height="92" rx="18"></rect>
+
+      <rect x="570" y="716" width="132" height="92" rx="18"></rect>
+
+    </g>
+
+    <!-- 黑色选中日期 -->
+    <rect x="570" y="582" width="132" height="108" rx="18" fill="#1B1B1B"></rect>
+
+    <!-- 白色勾 -->
+    <path d="M604 636 L632 664 L678 615" fill="none" stroke="#FFFFFF" stroke-width="22" stroke-linecap="round" stroke-linejoin="round"></path>
+
+  </g>
+
+</svg>

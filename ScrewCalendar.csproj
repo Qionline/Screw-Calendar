@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>ScrewCalendar</AssemblyName>
+    <RootNamespace>ScrewCalendar</RootNamespace>
+    <Description>A Windows desktop calendar and local Markdown todo widget.</Description>
+    <Authors>Qionline</Authors>
+    <Copyright>Copyright © 2026 Qionline</Copyright>
+    <RepositoryUrl>https://github.com/Qionline/Screw-Calendar</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageLicenseExpression>GPL-3.0-or-later</PackageLicenseExpression>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>logo.ico</ApplicationIcon>
+    <Platforms>x64</Platforms>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <Resource Include="logo.png" />
+    <None Update="logo.ico" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="locales\*.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="Resources\Data\calendar-data.json" CopyToOutputDirectory="PreserveNewest" />
+    <Compile Remove="tests\**\*.cs" />
+    <Compile Remove="Shared\**\*.cs" />
+    <Page Remove="Shared\**\*.xaml" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="Shared\DesktopWidgets.Toolkit\DesktopWidgets.Toolkit.csproj" />
+    <PackageReference Include="Markdig" Version="1.3.2" />
+  </ItemGroup>
+</Project>

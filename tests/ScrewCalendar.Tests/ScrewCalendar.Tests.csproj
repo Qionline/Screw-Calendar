@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\Shared\DesktopWidgets.Toolkit\DesktopWidgets.Toolkit.csproj" />
+    <PackageReference Include="Markdig" Version="1.3.2" />
+    <Compile Include="..\..\Models\CalendarState.cs" Link="Source\CalendarState.cs" />
+    <Compile Include="..\..\Models\HolidayInfo.cs" Link="Source\HolidayInfo.cs" />
+    <Compile Include="..\..\Calendar\CalendarLayout.cs" Link="Source\CalendarLayout.cs" />
+    <Compile Include="..\..\Calendar\CalendarRow.cs" Link="Source\CalendarRow.cs" />
+    <Compile Include="..\..\Calendar\CalendarMath.cs" Link="Source\CalendarMath.cs" />
+    <Compile Include="..\..\Calendar\CalendarComponentSizing.cs" Link="Source\CalendarComponentSizing.cs" />
+    <Compile Include="..\..\Calendar\MarkdownDocumentService.cs" Link="Source\MarkdownDocumentService.cs" />
+    <Compile Include="..\..\Controls\MarkdownBlockEditor.cs" Link="Source\MarkdownBlockEditor.cs" />
+    <Compile Include="..\..\Services\AppLogger.cs" Link="Source\AppLogger.cs" />
+    <Compile Include="..\..\Services\CalendarDataStore.cs" Link="Source\CalendarDataStore.cs" />
+    <Compile Include="..\..\Services\CalendarMetadataService.cs" Link="Source\CalendarMetadataService.cs" />
+    <Compile Include="..\..\Services\MarkdownImageStore.cs" Link="Source\MarkdownImageStore.cs" />
+    <None Include="..\..\locales\*.json" Link="locales\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\Resources\Data\calendar-data.json" Link="Resources\Data\calendar-data.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>
