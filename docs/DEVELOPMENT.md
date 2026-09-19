@@ -35,6 +35,7 @@ ScrewCalendar/
 ├─ tests/ScrewCalendar.Tests/   无第三方测试框架的自动化回归测试
 ├─ artifacts/publish/           最终单文件发布目录
 ├─ docs/                        用户指南与开发文档
+│  └─ RELEASING.md              版本、标签和 GitHub Release 流程
 ├─ .github/                     CI、依赖更新、Issue 与 PR 模板
 ├─ UI_STYLE_CONTRACT.md         已确认 UI 尺寸和回归约束
 ├─ CONTRIBUTING.md              贡献流程与合并要求
@@ -150,14 +151,13 @@ ScrewCalendar/
 安装：
 
 1. Windows 10 或 Windows 11 x64。
-2. [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)。仅安装 Runtime 无法编译。
+2. 安装 `global.json` 指定的 [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)。仅安装 Runtime 无法编译，具体补丁版本以该文件为准。
 3. 可选：Visual Studio 2022，并启用“.NET 桌面开发”工作负载。
 
 进入项目根目录后恢复依赖：
 
 ```powershell
-dotnet restore .\ScrewCalendar.csproj --configfile .\NuGet.Config
-dotnet restore .\tests\ScrewCalendar.Tests\ScrewCalendar.Tests.csproj --configfile .\NuGet.Config
+dotnet restore .\ScrewCalendar.sln --configfile .\NuGet.Config --locked-mode
 ```
 
 如果新电脑无法访问 NuGet，请先确认能够访问 `https://api.nuget.org/v3/index.json`，并检查代理、防火墙及用户目录下的 NuGet 配置权限。
@@ -198,6 +198,7 @@ dotnet run --project .\tests\ScrewCalendar.Tests\ScrewCalendar.Tests.csproj -c R
 - 日历行数上限以及底部面板只读取今天的日期 Markdown。
 - 中英文翻译键完整性。
 - 节假日和节气资源加载。
+- 应用版本、固定 SDK 和发布包许可证文件契约。
 
 新增数据规则、布局常量、本地化键或年份数据时，必须同步增加或更新测试。
 
@@ -220,7 +221,7 @@ bin\Release\net8.0-windows\win-x64\
 生成自包含单文件发布：
 
 ```powershell
-dotnet publish .\ScrewCalendar.csproj -c Release -r win-x64 --self-contained true --no-restore -o .\artifacts\publish
+dotnet publish .\ScrewCalendar.csproj -c Release --no-restore -o .\artifacts\publish
 ```
 
 最终可交付程序：
@@ -229,7 +230,7 @@ dotnet publish .\ScrewCalendar.csproj -c Release -r win-x64 --self-contained tru
 artifacts\publish\ScrewCalendar.exe
 ```
 
-`artifacts/publish` 是整理后的免安装发布目录；当前还会包含 PDB、本地化 JSON 和日历数据资源。PDB 可在正式分发时不提供，但开发留档建议保留。
+`artifacts/publish` 是整理后的免安装发布目录，其中包含 PDB、本地化 JSON、日历数据资源、项目许可证、README 和第三方声明。PDB 可在正式分发时不提供，但开发留档建议保留。创建版本标签与 GitHub Release 的完整流程见 [RELEASING.md](RELEASING.md)。
 
 ## 发布前人工检查
 
@@ -260,8 +261,8 @@ artifacts\publish\ScrewCalendar.exe
 
 1. 复制整个项目源码目录，但可以不复制 `bin/`、`obj/`、测试输出和 `artifacts/publish/`。
 2. 如需带走 Markdown 待办，在旧电脑设置中导出 JSON；如使用了图片，还要复制正式数据目录中的 `assets` 文件夹。
-3. 在新电脑安装 .NET 8 SDK。
-4. 进入项目根目录，执行两条 `dotnet restore` 命令。
+3. 在新电脑安装 `global.json` 指定的 .NET 8 SDK。
+4. 进入项目根目录，执行带 `--locked-mode` 的解决方案还原命令。
 5. 运行自动化测试，确认环境正常。
 6. 执行 Release 构建和发布命令。
 7. 启动新程序，在设置中导入之前导出的 JSON。

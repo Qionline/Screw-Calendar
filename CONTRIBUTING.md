@@ -7,14 +7,14 @@
 ## 开始之前
 
 - 目标平台为 Windows 10/11 x64。
-- 安装 .NET 8 SDK。
+- 安装 `global.json` 指定的 .NET 8 SDK；`dotnet --version` 必须输出兼容版本。
 - UI 修改前必须完整阅读 `UI_STYLE_CONTRACT.md`。
 - 不要提交 `bin`、`obj`、`artifacts`、用户日历数据、日志或本机配置。
 
 ## 本地验证
 
 ```powershell
-dotnet restore .\ScrewCalendar.sln --configfile .\NuGet.Config
+dotnet restore .\ScrewCalendar.sln --configfile .\NuGet.Config --locked-mode
 dotnet run --project .\tests\ScrewCalendar.Tests\ScrewCalendar.Tests.csproj -c Release --no-restore
 dotnet build .\ScrewCalendar.csproj -c Release --no-restore
 dotnet format .\ScrewCalendar.sln --verify-no-changes --no-restore
@@ -28,5 +28,6 @@ dotnet format .\ScrewCalendar.sln --verify-no-changes --no-restore
 - 行为或数据格式变更必须更新测试与文档。
 - UI 变更必须按 `UI_STYLE_CONTRACT.md` 完成回归检查。
 - 不得包含真实用户数据、截图中的隐私信息或密钥。
+- 文本文件统一使用 LF 行尾；提交前必须通过格式检查。
 
 提交 Pull Request 即表示你有权贡献该内容，并同意该贡献按本仓库的 GPL-3.0-or-later 许可证发布。

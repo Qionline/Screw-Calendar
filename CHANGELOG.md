@@ -6,6 +6,18 @@
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-09-19
+
 ### Added
 
-- 建立开源仓库工程规范、持续集成和贡献文档。
+- Windows 10/11 x64 桌面日历，支持 5～10 行、按月翻页和今天定位。
+- Windows 11、极简、桌面挂件样式，以及明暗模式、主题色和透明度。
+- 节气、2025～2026 年中国法定节假日与调休信息。
+- 常驻和按日期保存的 Markdown 待办、任务勾选与本机图片归档。
+- 托盘、开机启动、窗口层级、位置大小锁定和多显示器恢复。
+- 本机 JSON 数据、导入导出、自动备份与损坏恢复。
+- 简体中文和英文界面。
+- 开源仓库规范、自动化回归测试、持续集成和版本发布流程。
+
+[Unreleased]: https://github.com/Qionline/Screw-Calendar/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/Qionline/Screw-Calendar/releases/tag/v0.1.0

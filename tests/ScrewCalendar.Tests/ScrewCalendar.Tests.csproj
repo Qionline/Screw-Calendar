@@ -8,7 +8,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\Shared\DesktopWidgets.Toolkit\DesktopWidgets.Toolkit.csproj" />
-    <PackageReference Include="Markdig" Version="1.3.2" />
+    <PackageReference Include="Markdig" />
     <Compile Include="..\..\Models\CalendarState.cs" Link="Source\CalendarState.cs" />
     <Compile Include="..\..\Models\HolidayInfo.cs" Link="Source\HolidayInfo.cs" />
     <Compile Include="..\..\Calendar\CalendarLayout.cs" Link="Source\CalendarLayout.cs" />
@@ -23,5 +23,10 @@
     <Compile Include="..\..\Services\MarkdownImageStore.cs" Link="Source\MarkdownImageStore.cs" />
     <None Include="..\..\locales\*.json" Link="locales\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\..\Resources\Data\calendar-data.json" Link="Resources\Data\calendar-data.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\ScrewCalendar.csproj" Link="Repository\ScrewCalendar.csproj" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\global.json" Link="Repository\global.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\Directory.Packages.props" Link="Repository\Directory.Packages.props" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\THIRD_PARTY_NOTICES.md" Link="Repository\THIRD_PARTY_NOTICES.md" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\.github\workflows\*.yml" Link="Repository\.github\workflows\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>
