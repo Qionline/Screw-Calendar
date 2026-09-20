@@ -20,6 +20,7 @@
     <Compile Include="..\..\Services\AppLogger.cs" Link="Source\AppLogger.cs" />
     <Compile Include="..\..\Services\CalendarDataStore.cs" Link="Source\CalendarDataStore.cs" />
     <Compile Include="..\..\Services\CalendarMetadataService.cs" Link="Source\CalendarMetadataService.cs" />
+    <Compile Include="..\..\Services\HolidayUpdateService.cs" Link="Source\HolidayUpdateService.cs" />
     <Compile Include="..\..\Services\MarkdownImageStore.cs" Link="Source\MarkdownImageStore.cs" />
     <None Include="..\..\locales\*.json" Link="locales\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\..\Resources\Data\calendar-data.json" Link="Resources\Data\calendar-data.json" CopyToOutputDirectory="PreserveNewest" />

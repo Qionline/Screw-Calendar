@@ -48,13 +48,28 @@ public sealed partial class MainWindow
         _resizeGrip.Visibility = _state.Locked ? Visibility.Collapsed : Visibility.Visible;
         if (_todoResizeGrip is not null)
             _todoResizeGrip.Visibility = _state.ShowTodoPanel && !_state.Locked ? Visibility.Visible : Visibility.Collapsed;
+        UpdateLockButtonVisual();
     }
-    private void SetLocked(bool enabled) { _state.Locked = enabled; UpdateGrip(); SaveState(); }
+    private void SetLocked(bool enabled)
+    {
+        _state.Locked = enabled;
+        UpdateGrip();
+        SaveState();
+        CreateTray();
+    }
+
+    private void UpdateLockButtonVisual()
+    {
+        if (_lockButton is null) return;
+        _lockButton.Content = BuildLockIcon(_state.Locked);
+        _lockButton.ToolTip = Localization.T(_state.Locked ? "nav.unlockTooltip" : "nav.lockTooltip");
+    }
     private void SetTopmost(bool enabled)
     {
         _state.Topmost = enabled;
         ApplyWindowLayering();
         SaveState();
+        CreateTray();
     }
 
     private void ApplyWindowLayering()
@@ -66,6 +81,7 @@ public sealed partial class MainWindow
         _state.StartWithWindows = enabled;
         StartupRegistration.SetEnabled("ScrewCalendar", enabled, logError: AppLogger.Error);
         SaveState();
+        CreateTray();
     }
 
     private void ResizeWindowToDesign()
@@ -78,6 +94,33 @@ public sealed partial class MainWindow
     }
 
     private double CurrentTodoHeight() => _state.ShowTodoPanel ? _state.TodoPanelHeight : 0;
+
+    private double CurrentCalendarScale() => Math.Clamp(
+        (_calendarDisplayWidth > 0 ? _calendarDisplayWidth : Width) / CalendarLayout.CardWidth,
+        CalendarLayout.CalendarScaleMinimum,
+        CalendarLayout.CalendarScaleMaximum);
+
+    private double ApplyCalendarScale(double scale)
+    {
+        if (_designHeight <= 0) return CurrentCalendarScale();
+        var screen = WindowPlacementService.WorkingArea(this);
+        var size = CalendarComponentSizing.FitCalendarWidth(
+            CalendarLayout.CardWidth * Math.Clamp(scale, CalendarLayout.CalendarScaleMinimum, CalendarLayout.CalendarScaleMaximum),
+            _designHeight,
+            CurrentTodoHeight(),
+            MinWidth,
+            screen.Height - 36);
+        ApplyComponentSize(size);
+        SaveGeometry();
+        return CurrentCalendarScale();
+    }
+
+    private double MaximumTodoPanelHeight()
+    {
+        var workArea = WindowPlacementService.WorkingArea(this);
+        var available = Math.Max(CalendarLayout.TodoPanelMinHeight, workArea.Bottom - Top - _calendarDisplayHeight - 12);
+        return Math.Min(CalendarLayout.TodoPanelMaxHeight, available);
+    }
 
     private void ApplyComponentSize(CalendarDisplaySize size)
     {
@@ -109,8 +152,7 @@ public sealed partial class MainWindow
         if (!_todoResizeGrip.IsMouseCaptured) return;
         var point = e.GetPosition(this);
         var workArea = WindowPlacementService.WorkingArea(this);
-        var available = Math.Max(CalendarLayout.TodoPanelMinHeight, workArea.Bottom - Top - _calendarDisplayHeight - 12);
-        var maximum = Math.Min(CalendarLayout.TodoPanelMaxHeight, available);
+        var maximum = MaximumTodoPanelHeight();
         _state.TodoPanelHeight = Math.Clamp(_todoResizeHeight + point.Y - _todoResizeStart.Y, CalendarLayout.TodoPanelMinHeight, maximum);
         ApplyComponentHeights(_calendarDisplayHeight, _state.TodoPanelHeight);
     }
