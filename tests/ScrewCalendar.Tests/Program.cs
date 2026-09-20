@@ -210,6 +210,28 @@ static void TestCalendarMetadata()
     var holiday = metadata.GetHoliday(new DateTime(2026, 10, 1));
     True(holiday is not null && holiday.IsOffDay, "Holiday lookup");
     Equal("秋分", metadata.GetSolarTerm(new DateTime(2026, 9, 23)), "Solar-term lookup");
+
+    const string remoteJson = """
+        { "year": 2027, "papers": [], "days": [
+          { "name": "测试节日", "date": "2027-01-01", "isOffDay": true },
+          { "name": "测试调班", "date": "2027-01-02", "isOffDay": false }
+        ] }
+        """;
+    True(metadata.TryApplyHolidayDocument(remoteJson, 2027), "Remote holiday document validation");
+    True(metadata.GetHoliday(new DateTime(2027, 1, 1))?.IsOffDay == true, "Remote holiday merge");
+    True(metadata.GetHoliday(new DateTime(2027, 1, 2))?.IsOffDay == false, "Remote workday merge");
+    True(!metadata.TryApplyHolidayDocument(remoteJson, 2028), "Reject mismatched remote holiday year");
+
+    WithTemporaryDirectory(directory =>
+    {
+        var cachedMetadata = new CalendarMetadataService(path, directory);
+        using var updater = new HolidayUpdateService(cachedMetadata, directory, (_, _) => System.Threading.Tasks.Task.FromResult<string?>(remoteJson));
+        updater.RefreshForCalendarYearAsync(2027).GetAwaiter().GetResult();
+        True(File.Exists(Path.Combine(directory, "2027.json")), "Remote holiday cache write");
+        True(cachedMetadata.GetHoliday(new DateTime(2027, 1, 1))?.IsOffDay == true, "Downloaded holiday applied");
+        var reloadedMetadata = new CalendarMetadataService(path, directory);
+        True(reloadedMetadata.GetHoliday(new DateTime(2027, 1, 2))?.IsOffDay == false, "Holiday cache reload");
+    });
 }
 
 static void TestReleaseMetadata()
@@ -237,7 +259,7 @@ static void TestReleaseMetadata()
     var sdk = sdkDocument.RootElement.GetProperty("sdk");
     True(Version.TryParse(sdk.GetProperty("version").GetString(), out var sdkVersion) && sdkVersion.Build >= 0,
         "SDK version must be fully qualified");
-    Equal("latestPatch", sdk.GetProperty("rollForward").GetString(), "SDK roll-forward policy");
+    Equal("latestFeature", sdk.GetProperty("rollForward").GetString(), "SDK roll-forward policy");
 
     var packageVersions = XDocument.Load(Path.Combine(repositoryDirectory, "Directory.Packages.props"));
     var markdigVersion = packageVersions.Descendants("PackageVersion")

@@ -22,7 +22,7 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
 ## holiday-cn
 
 - 项目：https://github.com/NateScarlet/holiday-cn
-- 用途：项目内 2025—2026 年中国法定节假日与调休数据的确认来源
+- 用途：项目内置节假日数据的确认来源，以及应用运行时静默更新中国法定节假日与调休数据的远端来源
 - 许可证：MIT
 - 版权所有：Copyright (c) 2019 NateScarlet
 

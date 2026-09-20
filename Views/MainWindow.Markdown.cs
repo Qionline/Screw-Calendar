@@ -59,14 +59,15 @@ public sealed partial class MainWindow
                     Focusable = !compact && toggleTask is not null,
                     VerticalAlignment = VerticalAlignment.Center,
                     HorizontalAlignment = HorizontalAlignment.Center,
-                    ToolTip = Localization.T("todo.complete")
+                    ToolTip = Localization.T("todo.complete"),
+                    Style = Resource<Style>("ToolkitRoundedCheckBoxStyle")
                 };
                 if (!compact && toggleTask is not null)
                 {
                     checkbox.Checked += (_, _) => toggleTask(currentTask, true);
                     checkbox.Unchecked += (_, _) => toggleTask(currentTask, false);
                 }
-                var text = InlineMarkdown(line.Text, compact ? 11 : 14, line.IsChecked ? Muted() : Foreground());
+                var text = InlineMarkdown(line.Text, 14, line.IsChecked ? Muted() : Foreground());
                 if (line.IsChecked) text.TextDecorations = TextDecorations.Strikethrough;
                 text.VerticalAlignment = VerticalAlignment.Center;
                 row.Children.Add(checkbox);
@@ -76,7 +77,7 @@ public sealed partial class MainWindow
             else
             {
                 var prefix = line.Kind == MarkdownLineKind.Bullet ? "•  " : string.Empty;
-                var size = compact ? 11 : line.Kind switch
+                var size = compact ? 14 : line.Kind switch
                 {
                     MarkdownLineKind.Heading1 => 22,
                     MarkdownLineKind.Heading2 => 18,
@@ -156,7 +157,7 @@ public sealed partial class MainWindow
             if (line.Kind == MarkdownLineKind.Task)
             {
                 var currentTask = taskIndex++;
-                var checkbox = new CheckBox { IsChecked = line.IsChecked, ToolTip = Localization.T("todo.complete"), Margin = new Thickness(0, 0, 7, -2) };
+                var checkbox = new CheckBox { IsChecked = line.IsChecked, ToolTip = Localization.T("todo.complete"), Margin = new Thickness(0, 0, 7, -2), Style = Resource<Style>("ToolkitRoundedCheckBoxStyle") };
                 if (toggleTask is not null)
                 {
                     checkbox.Checked += (_, _) => toggleTask(currentTask, true);

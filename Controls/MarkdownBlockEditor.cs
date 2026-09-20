@@ -185,7 +185,8 @@ public sealed class MarkdownBlockEditor : Border
             {
                 IsChecked = block.IsChecked,
                 VerticalAlignment = VerticalAlignment.Center,
-                HorizontalAlignment = HorizontalAlignment.Center
+                HorizontalAlignment = HorizontalAlignment.Center,
+                Style = Application.Current?.TryFindResource("ToolkitRoundedCheckBoxStyle") as Style
             };
             checkbox.Checked += (_, _) => { block.IsChecked = true; ApplyEditorTypography(block); RaiseChanged(); };
             checkbox.Unchecked += (_, _) => { block.IsChecked = false; ApplyEditorTypography(block); RaiseChanged(); };

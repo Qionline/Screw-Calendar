@@ -17,6 +17,74 @@
 
   <ControlTemplate x:Key="ToolkitContentOnlyRadioTemplate" TargetType="{x:Type RadioButton}"><ContentPresenter ContentSource="Content" /></ControlTemplate>
 
+  <ControlTemplate x:Key="ToolkitRoundedCheckBoxTemplate" TargetType="{x:Type CheckBox}">
+    <StackPanel Orientation="Horizontal">
+      <Border x:Name="CheckBoxBorder" Width="18" Height="18" CornerRadius="4" BorderThickness="1.5" BorderBrush="{DynamicResource ToolkitInputUnderlineBrush}" Background="Transparent" VerticalAlignment="Center">
+        <Path x:Name="CheckMark" Data="M3,9 L7,13 L15,4" Stroke="White" StrokeThickness="2" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" Visibility="Collapsed" Stretch="Fill" Margin="2" />
+      </Border>
+      <ContentPresenter ContentSource="Content" Margin="8,0,0,0" VerticalAlignment="Center" />
+    </StackPanel>
+    <ControlTemplate.Triggers>
+      <Trigger Property="IsChecked" Value="True">
+        <Setter TargetName="CheckBoxBorder" Property="Background" Value="{DynamicResource ToolkitAccentBrush}" />
+        <Setter TargetName="CheckBoxBorder" Property="BorderBrush" Value="{DynamicResource ToolkitAccentBrush}" />
+        <Setter TargetName="CheckMark" Property="Visibility" Value="Visible" />
+      </Trigger>
+      <Trigger Property="IsMouseOver" Value="True">
+        <Setter TargetName="CheckBoxBorder" Property="BorderBrush" Value="{DynamicResource ToolkitAccentBrush}" />
+      </Trigger>
+      <Trigger Property="IsEnabled" Value="False">
+        <Setter TargetName="CheckBoxBorder" Property="Opacity" Value="0.55" />
+        <Setter Property="Opacity" Value="0.62" />
+      </Trigger>
+    </ControlTemplate.Triggers>
+  </ControlTemplate>
+
+  <Style x:Key="ToolkitRoundedCheckBoxStyle" TargetType="{x:Type CheckBox}">
+    <Setter Property="Template" Value="{StaticResource ToolkitRoundedCheckBoxTemplate}" />
+    <Setter Property="Foreground" Value="{DynamicResource ToolkitInputUnderlineBrush}" />
+    <Setter Property="Cursor" Value="Hand" />
+  </Style>
+
+  <ControlTemplate x:Key="ToolkitSettingsSliderTemplate" TargetType="{x:Type Slider}">
+    <Grid Height="{TemplateBinding Height}" Background="Transparent">
+      <Border Height="4" VerticalAlignment="Center" CornerRadius="2" Background="{DynamicResource ToolkitSliderTrackBrush}" />
+      <Track x:Name="PART_Track" Orientation="Horizontal" VerticalAlignment="Center" Focusable="False"
+             Minimum="{TemplateBinding Minimum}" Maximum="{TemplateBinding Maximum}" Value="{TemplateBinding Value}"
+             IsDirectionReversed="{TemplateBinding IsDirectionReversed}">
+        <Track.DecreaseRepeatButton>
+          <RepeatButton Command="{x:Static Slider.DecreaseLarge}" CommandTarget="{Binding RelativeSource={RelativeSource TemplatedParent}}" Background="{DynamicResource ToolkitAccentBrush}" BorderThickness="0" IsTabStop="False">
+            <RepeatButton.Template>
+              <ControlTemplate TargetType="{x:Type RepeatButton}"><Border Background="{TemplateBinding Background}" CornerRadius="2" /></ControlTemplate>
+            </RepeatButton.Template>
+          </RepeatButton>
+        </Track.DecreaseRepeatButton>
+        <Track.Thumb>
+          <Thumb Width="14" Height="8" Background="{DynamicResource ToolkitAccentBrush}" Focusable="False">
+            <Thumb.Template>
+              <ControlTemplate TargetType="{x:Type Thumb}">
+                <Border CornerRadius="2" Background="{TemplateBinding Background}" />
+              </ControlTemplate>
+            </Thumb.Template>
+          </Thumb>
+        </Track.Thumb>
+        <Track.IncreaseRepeatButton>
+          <RepeatButton Command="{x:Static Slider.IncreaseLarge}" CommandTarget="{Binding RelativeSource={RelativeSource TemplatedParent}}" Background="{DynamicResource ToolkitSliderTrackBrush}" BorderThickness="0" IsTabStop="False">
+            <RepeatButton.Template>
+              <ControlTemplate TargetType="{x:Type RepeatButton}"><Border Background="{TemplateBinding Background}" CornerRadius="2" /></ControlTemplate>
+            </RepeatButton.Template>
+          </RepeatButton>
+        </Track.IncreaseRepeatButton>
+      </Track>
+    </Grid>
+  </ControlTemplate>
+
+  <Style x:Key="ToolkitSettingsSliderStyle" TargetType="{x:Type Slider}">
+    <Setter Property="Height" Value="24" />
+    <Setter Property="Foreground" Value="{DynamicResource ToolkitAccentBrush}" />
+    <Setter Property="Template" Value="{StaticResource ToolkitSettingsSliderTemplate}" />
+  </Style>
+
   <ControlTemplate x:Key="ToolkitUnderlineTextInputTemplate" TargetType="{x:Type TextBox}">
     <Grid>
       <Border x:Name="InputFrame" CornerRadius="6" BorderBrush="{DynamicResource ToolkitInputOutlineBrush}" BorderThickness="1" Background="{TemplateBinding Background}">

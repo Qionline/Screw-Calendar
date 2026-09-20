@@ -56,6 +56,7 @@ public sealed partial class MainWindow
 
     private void RenderTodoPanel()
     {
+        EndTodoEditorInteraction();
         var visible = _state.ShowTodoPanel;
         _todoPanel.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
         _todoResizeGrip.Visibility = visible && !_state.Locked ? Visibility.Visible : Visibility.Collapsed;
@@ -125,27 +126,35 @@ public sealed partial class MainWindow
             today.Click += (_, _) => BeginInlineMarkdownEdit(date, false);
             actions.Children.Add(today);
         }
-        var edit = EditHeaderButton();
-        edit.Opacity = .42;
-        edit.Click += (_, _) => BeginInlineMarkdownEdit(date, permanent);
-        edit.MouseEnter += (_, _) => edit.Opacity = 1;
-        edit.MouseLeave += (_, _) => edit.Opacity = .42;
-        actions.Children.Add(edit);
         Grid.SetColumn(actions, 1); header.Children.Add(actions);
         section.Children.Add(header);
 
         UIElement content;
         if (string.IsNullOrWhiteSpace(markdown))
         {
-            var empty = HeaderActionButton(permanent ? Localization.T("todo.emptyPermanent") : Localization.T("todo.emptyToday"), Localization.T("todo.edit"), 220);
-            empty.HorizontalAlignment = HorizontalAlignment.Left;
-            empty.Foreground = Muted();
-            empty.Click += (_, _) => BeginInlineMarkdownEdit(date, permanent);
+            var empty = new Border
+            {
+                Width = 220,
+                Height = 32,
+                Padding = new Thickness(5, 0, 5, 0),
+                Background = Brushes.Transparent,
+                Cursor = Cursors.Hand,
+                Child = Text(permanent ? Localization.T("todo.emptyPermanent") : Localization.T("todo.emptyToday"), 14, Muted())
+            };
+            empty.MouseLeftButtonDown += (_, e) => { e.Handled = true; BeginInlineMarkdownEdit(date, permanent); };
             content = empty;
         }
         else
         {
-            content = RenderSelectableMarkdown(markdown, (taskIndex, completed) => ToggleMarkdownTask(date, permanent, taskIndex, completed));
+            var rendered = RenderSelectableMarkdown(markdown, (taskIndex, completed) => ToggleMarkdownTask(date, permanent, taskIndex, completed));
+            rendered.Cursor = Cursors.Hand;
+            rendered.PreviewMouseLeftButtonDown += (_, e) =>
+            {
+                if (IsTodoInteractiveSource(e.OriginalSource)) return;
+                e.Handled = true;
+                BeginInlineMarkdownEdit(date, permanent);
+            };
+            content = rendered;
         }
         Grid.SetRow(content, 1); section.Children.Add(content);
         return section;
@@ -165,6 +174,8 @@ public sealed partial class MainWindow
 
     private void BeginInlineMarkdownEdit(DateTime date, bool permanent)
     {
+        _todoEditorActive = true;
+        _windowLayerController.SetInteractive(true);
         var editor = new MarkdownBlockEditor(Foreground(), Muted(), InputBackground(), Line(), Accent(), _uiFont, LoadMarkdownImage);
         editor.SetMarkdown(GetMarkdownDocument(date, permanent));
 
@@ -261,19 +272,11 @@ public sealed partial class MainWindow
         }
     }
 
-    private Button EditHeaderButton()
+    private void EndTodoEditorInteraction()
     {
-        var icon = new Path
-        {
-            Data = Geometry.Parse("M3,17.25V21H6.75L17.81,9.94L14.06,6.19L3,17.25M20.71,7.04C21.1,6.65 21.1,6.02 20.71,5.63L18.37,3.29C17.98,2.9 17.35,2.9 16.96,3.29L15.13,5.12L18.88,8.87L20.71,7.04Z"),
-            Fill = Accent(),
-            Stretch = Stretch.Uniform,
-            Width = 15,
-            Height = 15
-        };
-        var button = HeaderActionButton(string.Empty, Localization.T("todo.edit"), 30);
-        button.Content = icon;
-        return button;
+        if (!_todoEditorActive) return;
+        _todoEditorActive = false;
+        _windowLayerController.SetInteractive(false);
     }
 
     private Button IconHeaderButton(string geometry, string toolTip, double width, Brush fill)
@@ -306,5 +309,18 @@ public sealed partial class MainWindow
         SetMarkdownDocument(date, permanent, updated);
         SaveState();
         Render();
+    }
+
+    private static bool IsTodoInteractiveSource(object source)
+    {
+        if (source is not DependencyObject current) return false;
+        for (var depth = 0; current is not null && depth < 32; depth++)
+        {
+            if (current is CheckBox or System.Windows.Controls.Button or System.Windows.Controls.Primitives.ScrollBar or System.Windows.Controls.Primitives.Thumb) return true;
+            current = current is Visual or System.Windows.Media.Media3D.Visual3D
+                ? VisualTreeHelper.GetParent(current)
+                : LogicalTreeHelper.GetParent(current);
+        }
+        return false;
     }
 }

@@ -30,6 +30,7 @@ public sealed partial class MainWindow : Window
     private readonly CalendarDataStore _dataStore;
     private readonly MarkdownImageStore _imageStore;
     private readonly CalendarMetadataService _metadata;
+    private readonly HolidayUpdateService _holidayUpdates;
     private readonly TrayIconService _tray = new();
     private readonly WindowLayerController _windowLayerController;
     private readonly FontFamily _uiFont;
@@ -48,11 +49,13 @@ public sealed partial class MainWindow : Window
     private TextBlock _currentDateText = null!;
     private TextBlock _currentWeekText = null!;
     private TextBlock _viewMonthText = null!;
+    private Border _toolbarSeparator = null!;
     private Button _styleButton = null!;
     private Button _previousButton = null!;
     private Button _nextButton = null!;
     private Button _todayButton = null!;
     private Button _themeButton = null!;
+    private Button _lockButton = null!;
     private Button _settingsButton = null!;
     private readonly Border _resizeGrip;
     private readonly DispatcherTimer _clock = new() { Interval = TimeSpan.FromSeconds(30) };
@@ -60,6 +63,7 @@ public sealed partial class MainWindow : Window
     private DateTime _anchor = DateTime.Today;
     private bool _home = true;
     private bool _allowExit;
+    private bool _todoEditorActive;
     private double _designHeight;
     private Point _resizeStart;
     private double _resizeWidth;
@@ -80,6 +84,11 @@ public sealed partial class MainWindow : Window
         _dataStore = CalendarDataStore.CreateDefault();
         _imageStore = new MarkdownImageStore(_dataStore.AssetsDirectory);
         _metadata = CalendarMetadataService.CreateDefault();
+        _holidayUpdates = new HolidayUpdateService(_metadata);
+        _holidayUpdates.DataUpdated += (_, _) =>
+        {
+            if (!Dispatcher.HasShutdownStarted) Dispatcher.BeginInvoke(Render);
+        };
         _state = _dataStore.Load();
         _windowLayerController = new WindowLayerController(this, allowFullscreenCover: true);
         _windowLayerController.SetAlwaysOnTop(_state.Topmost);
@@ -167,6 +176,7 @@ public sealed partial class MainWindow : Window
             ShowInTaskbar = false;
             if (_state.Topmost) Activate();
             else _windowLayerController.Refresh();
+            _ = _holidayUpdates.RefreshForCalendarYearAsync(_anchor.Year);
         };
         LocationChanged += (_, _) => SaveGeometry();
         SizeChanged += (_, _) => SaveGeometry();
@@ -200,18 +210,22 @@ public sealed partial class MainWindow : Window
         row.Children.Add(left);
 
         var right = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-        _viewMonthText = Text("", 14, FontWeights.SemiBold, Foreground(), new Thickness(0, 0, 13, 0));
-        right.Children.Add(_viewMonthText);
+        _viewMonthText = Text("", 14, FontWeights.SemiBold, Foreground());
+        _viewMonthText.HorizontalAlignment = HorizontalAlignment.Center;
+        _viewMonthText.VerticalAlignment = VerticalAlignment.Center;
+        var monthHost = new Border { Width = 112, Height = 34, VerticalAlignment = VerticalAlignment.Center, Child = _viewMonthText };
+        right.Children.Add(monthHost);
         _previousButton = Button(Localization.T("nav.previous"), Localization.T("nav.previousTooltip"), 34);
         _previousButton.Click += (_, _) => Navigate(-1);
         _nextButton = Button(Localization.T("nav.next"), Localization.T("nav.nextTooltip"), 34);
         _nextButton.Click += (_, _) => Navigate(1);
         right.Children.Add(_previousButton);
         right.Children.Add(_nextButton);
-        _todayButton = Button(Localization.T("nav.today"), Localization.T("nav.todayTooltip"), 74);
+        _todayButton = Button(Localization.T("nav.today"), Localization.T("nav.todayTooltip"), 58);
         _todayButton.Click += (_, _) => GoToday();
         right.Children.Add(_todayButton);
-        right.Children.Add(new Border { Width = 1, Height = 22, Margin = new Thickness(7, 0, 7, 0), Background = Line() });
+        _toolbarSeparator = new Border { Width = 1, Height = 22, Margin = new Thickness(7, 0, 7, 0), Background = Line() };
+        right.Children.Add(_toolbarSeparator);
         _styleButton = Button(StyleName(), Localization.T("nav.styleTooltip"), 92);
         _styleButton.Click += (_, _) => CycleStyle();
         right.Children.Add(_styleButton);
@@ -219,10 +233,15 @@ public sealed partial class MainWindow : Window
         _themeButton.FontSize = 19;
         _themeButton.Click += (_, _) => { _state.Theme = _state.Theme == CalendarTheme.Light ? CalendarTheme.Dark : CalendarTheme.Light; SaveAndRender(); };
         right.Children.Add(_themeButton);
+        _lockButton = Button(string.Empty, string.Empty, 34);
+        _lockButton.FontSize = 16;
+        _lockButton.Click += (_, _) => SetLocked(!_state.Locked);
+        right.Children.Add(_lockButton);
         _settingsButton = Button("⚙", Localization.T("nav.settingsTooltip"), 34);
         _settingsButton.FontSize = 18;
         _settingsButton.Click += (_, _) => ShowSettings(Mouse.GetPosition(this));
         right.Children.Add(_settingsButton);
+        UpdateLockButtonVisual();
         Grid.SetColumn(right, 1);
         row.Children.Add(right);
         toolbar.Child = row;
@@ -254,6 +273,7 @@ public sealed partial class MainWindow : Window
         _todayButton.ToolTip = Localization.T("nav.todayTooltip");
         _styleButton.ToolTip = Localization.T("nav.styleTooltip");
         _themeButton.ToolTip = Localization.T("nav.themeTooltip");
+        UpdateLockButtonVisual();
         _settingsButton.ToolTip = Localization.T("nav.settingsTooltip");
         Render();
         CreateTray();
@@ -434,9 +454,11 @@ public sealed partial class MainWindow : Window
         SaveAndRender();
     }
 
-    private void Navigate(int delta) { _anchor = new DateTime(_anchor.Year, _anchor.Month, 1).AddMonths(delta); _home = false; Render(); }
-    private void GoToday() { RefreshToday(); _anchor = _today; _home = true; Render(); }
+    private void Navigate(int delta) { _anchor = new DateTime(_anchor.Year, _anchor.Month, 1).AddMonths(delta); _home = false; Render(); _ = _holidayUpdates.RefreshForCalendarYearAsync(_anchor.Year); }
+    private void GoToday() { RefreshToday(); _anchor = _today; _home = true; Render(); _ = _holidayUpdates.RefreshForCalendarYearAsync(_anchor.Year); }
     private void RefreshToday() { var now = DateTime.Today; if (now != _today) { _today = now; if (_home) _anchor = now; Render(); } }
+
+    internal void DisposeHolidayUpdates() => _holidayUpdates.Dispose();
 
     private void ApplyVisuals()
     {
@@ -469,7 +491,7 @@ public sealed partial class MainWindow : Window
             _weekdayBar.BorderBrush = widgetLine;
             _weekdayBar.BorderThickness = new Thickness(1);
             _weekdayBar.CornerRadius = new CornerRadius(11);
-            _weekdayBar.Margin = new Thickness(CalendarLayout.GridHorizontalMargin, 0, CalendarLayout.GridHorizontalMargin, 5);
+            _weekdayBar.Margin = new Thickness(CalendarLayout.WidgetOuterInset, 0, CalendarLayout.WidgetOuterInset, 5);
         }
         else
         {
@@ -488,6 +510,7 @@ public sealed partial class MainWindow : Window
             _weekdayBar.CornerRadius = new CornerRadius(0);
             _weekdayBar.Margin = new Thickness(0);
         }
+        ApplyToolbarVisuals();
         ApplyWeekdayVisuals();
         _calendarLogo.Child = BuildThemeLogo();
         UpdateGrip();
@@ -514,6 +537,21 @@ public sealed partial class MainWindow : Window
                 text.Text = WeekdayName(i);
                 text.Foreground = WeekdayForeground(i);
             }
+        }
+    }
+
+    private void ApplyToolbarVisuals()
+    {
+        var foreground = Foreground();
+        _currentDateText.Foreground = foreground;
+        _currentWeekText.Foreground = Muted();
+        _viewMonthText.Foreground = foreground;
+        _toolbarSeparator.Background = Line();
+
+        foreach (var button in new[] { _previousButton, _nextButton, _todayButton, _styleButton, _themeButton, _lockButton, _settingsButton })
+        {
+            button.Foreground = foreground;
+            button.BorderBrush = Line();
         }
     }
 
@@ -554,6 +592,25 @@ public sealed partial class MainWindow : Window
         return logo;
     }
 
+    private Path BuildLockIcon(bool locked)
+    {
+        return new Path
+        {
+            Data = Geometry.Parse(locked
+                ? "M5,8 V6 A4,4 0 0 1 13,6 V8 M3,8 H15 V16 H3 Z"
+                : "M6,8 V6 A4,4 0 0 1 13,4 M3,8 H15 V16 H3 Z"),
+            Stroke = Foreground(),
+            StrokeThickness = 1.7,
+            StrokeStartLineCap = PenLineCap.Round,
+            StrokeEndLineCap = PenLineCap.Round,
+            StrokeLineJoin = PenLineJoin.Round,
+            Fill = Brushes.Transparent,
+            Stretch = Stretch.Uniform,
+            Width = 17,
+            Height = 17
+        };
+    }
+
     private static Rectangle LogoRect(double x, double y, double width, double height, double radius, Brush fill)
     {
         var rect = new Rectangle { Width = width, Height = height, RadiusX = radius, RadiusY = radius, Fill = fill };
@@ -571,11 +628,13 @@ public sealed partial class MainWindow : Window
 
     private void UpdateCalendarContentWidths()
     {
-        // All three calendar regions use the same fixed design width. The
-        // date columns and item margins already add up to this value.
-        _weekdayBar.Width = CalendarLayout.GridWidth;
+        // Date columns keep their fixed 854px design width. The toolbar and
+        // weekday surface extend into the surrounding whitespace by style.
+        var outerInset = _state.Style == CalendarStyle.Widget ? CalendarLayout.WidgetOuterInset : CalendarLayout.ToolbarOuterInset;
+        var outerWidth = CalendarLayout.CardWidth - outerInset * 2;
+        _weekdayBar.Width = outerWidth;
         _weekdayPanel.Width = CalendarLayout.GridWidth;
-        _toolbar.Width = CalendarLayout.GridWidth;
+        _toolbar.Width = outerWidth;
         foreach (var holder in _datesGrid.Children.OfType<Grid>())
             holder.Width = CalendarLayout.GridWidth;
     }
@@ -603,6 +662,7 @@ public sealed partial class MainWindow : Window
         Application.Current.Resources["ToolkitAccentBrush"] = new SolidColorBrush(accent);
         Application.Current.Resources["ToolkitInputOutlineBrush"] = new SolidColorBrush(dark ? Color.FromRgb(79, 90, 103) : Color.FromRgb(216, 224, 233));
         Application.Current.Resources["ToolkitInputUnderlineBrush"] = new SolidColorBrush(dark ? Color.FromRgb(126, 138, 153) : Color.FromRgb(91, 103, 117));
+        Application.Current.Resources["ToolkitSliderTrackBrush"] = new SolidColorBrush(dark ? Color.FromRgb(72, 83, 96) : Color.FromRgb(174, 188, 202));
         Application.Current.Resources["ToolkitScrollThumbBrush"] = new SolidColorBrush(dark ? Color.FromRgb(118, 134, 152) : Color.FromRgb(174, 188, 202));
         Application.Current.Resources["ToolkitScrollThumbHoverBrush"] = new SolidColorBrush(dark ? Color.FromRgb(145, 161, 179) : Color.FromRgb(143, 160, 178));
     }

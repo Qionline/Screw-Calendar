@@ -45,6 +45,7 @@ public sealed partial class MainWindow
             return;
         }
         SaveGeometry();
+        DisposeHolidayUpdates();
         DisposeTray();
     }
 }

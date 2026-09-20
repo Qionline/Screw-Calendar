@@ -9,6 +9,8 @@ public static class CalendarLayout
     public const int MaximumRows = 10;
     public const double CardWidth = 886;
     public const double GridHorizontalMargin = 16;
+    public const double ToolbarOuterInset = 4;
+    public const double WidgetOuterInset = 10;
     public const double GridBottomMargin = 16;
     public const double CellWidth = 118;
     public const double CellMargin = 2;
@@ -20,6 +22,10 @@ public static class CalendarLayout
     public const double TodoPanelMinHeight = 140;
     public const double TodoPanelMaxHeight = 520;
     public const double TodoResizeGripHeight = 8;
+    public const double CalendarScaleMinimum = .6;
+    public const double CalendarScaleMaximum = 1.4;
+    public const double CalendarScaleStep = .05;
+    public const double TodoPanelHeightStep = 10;
     public const double MinimumWindowWidth = 300;
     public const double MinimumWindowHeight = 280;
     public const double DialogHorizontalPadding = 16;
