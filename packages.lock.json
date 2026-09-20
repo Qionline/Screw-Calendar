@@ -18,7 +18,7 @@
         "type": "Direct",
         "requested": "[8.0.31, )",
         "resolved": "8.0.31",
-        "contentHash": "IJZNYlvt7fSK2NBdHV03ethT05+zls4Z3IpfdHCL6NqkZwSp2jwwHUzSmPFMOC//e5XKxoYDPlDNI49pPg6IvQ=="
+        "contentHash": "OJdAGATV2QoVWL11zlDLEluA06q8rK+cgZR47ohrO8V+Qj5z9dlvN7bG9/0e5t0IOe+yD8tREC0bpsEgDGrzIQ=="
       },
       "desktopwidgets.toolkit": {
         "type": "Project"
