@@ -23,6 +23,15 @@ public sealed class MarkdownBlockEditor : Border
     private readonly FontFamily _fontFamily;
     private readonly Func<string, BitmapSource?> _imageLoader;
     private EditorBlock? _activeBlock;
+    // Blocks keep independent typography, while these fields bridge selection across their TextBoxes.
+    private TextBox? _selectionAnchorEditor;
+    private int _selectionAnchorOffset;
+    private bool _dragSelectingAcrossBlocks;
+    private bool _hasCrossBlockSelection;
+    private int _selectionStartBlock;
+    private int _selectionStartOffset;
+    private int _selectionEndBlock;
+    private int _selectionEndOffset;
     private bool _loading;
 
     public MarkdownBlockEditor(Brush foreground, Brush muted, Brush surface, Brush line, Brush accent, FontFamily fontFamily, Func<string, BitmapSource?> imageLoader)
@@ -48,12 +57,18 @@ public sealed class MarkdownBlockEditor : Border
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled
         };
         PreviewMouseLeftButtonDown += FocusEditorFromBlankArea;
+        PreviewMouseLeftButtonDown += TrackSelectionAnchor;
+        PreviewMouseMove += ExtendSelectionAcrossBlocks;
+        PreviewMouseLeftButtonUp += FinishSelectionAcrossBlocks;
+        DataObject.AddPastingHandler(this, HandleCrossBlockPaste);
     }
 
     public event EventHandler? ContentChanged;
 
     public void SetMarkdown(string markdown)
     {
+        ClearCrossBlockSelection();
+        _selectionAnchorEditor = null;
         _loading = true;
         _panel.Children.Clear();
         _blocks.Clear();
@@ -66,6 +81,26 @@ public sealed class MarkdownBlockEditor : Border
 
     public void ApplyKind(MarkdownLineKind kind)
     {
+        if (_hasCrossBlockSelection)
+        {
+            var start = _selectionStartBlock;
+            var end = _selectionEndBlock;
+            ClearCrossBlockSelection();
+            _loading = true;
+            for (var index = start; index <= end; index++)
+            {
+                var selected = _blocks[index];
+                if (selected.Kind == MarkdownLineKind.Image) continue;
+                selected.Kind = kind;
+                if (kind != MarkdownLineKind.Task) selected.IsChecked = false;
+                RefreshBlock(selected);
+            }
+            _loading = false;
+            RaiseChanged();
+            _blocks[Math.Clamp(start, 0, _blocks.Count - 1)].Editor.Focus();
+            return;
+        }
+
         var block = _activeBlock ?? _blocks.LastOrDefault();
         if (block is null || block.Kind == MarkdownLineKind.Image)
         {
@@ -108,6 +143,248 @@ public sealed class MarkdownBlockEditor : Border
         eventArgs.Handled = true;
     }
 
+    private void TrackSelectionAnchor(object sender, MouseButtonEventArgs eventArgs)
+    {
+        if (eventArgs.ChangedButton != MouseButton.Left) return;
+        var editor = FindEditor(eventArgs.OriginalSource as DependencyObject);
+        if (editor is null)
+        {
+            _selectionAnchorEditor = null;
+            return;
+        }
+
+        ClearCrossBlockSelection();
+        _selectionAnchorEditor = editor;
+        _selectionAnchorOffset = CharacterIndex(editor, eventArgs.GetPosition(editor));
+        _dragSelectingAcrossBlocks = false;
+    }
+
+    private void ExtendSelectionAcrossBlocks(object sender, MouseEventArgs eventArgs)
+    {
+        if (_selectionAnchorEditor is null || Mouse.LeftButton != MouseButtonState.Pressed) return;
+        var target = FindEditor(eventArgs.OriginalSource as DependencyObject) ?? FindEditor(Mouse.DirectlyOver as DependencyObject);
+        if (target is null || (ReferenceEquals(target, _selectionAnchorEditor) && !_dragSelectingAcrossBlocks)) return;
+
+        if (!_dragSelectingAcrossBlocks)
+        {
+            _dragSelectingAcrossBlocks = true;
+            CaptureMouse();
+        }
+
+        ApplyBlockSelection(_selectionAnchorEditor, _selectionAnchorOffset, target, CharacterIndex(target, eventArgs.GetPosition(target)));
+        eventArgs.Handled = true;
+    }
+
+    private void FinishSelectionAcrossBlocks(object sender, MouseButtonEventArgs eventArgs)
+    {
+        if (!_dragSelectingAcrossBlocks || eventArgs.ChangedButton != MouseButton.Left) return;
+        var target = FindEditor(eventArgs.OriginalSource as DependencyObject) ?? FindEditor(Mouse.DirectlyOver as DependencyObject);
+        if (target is not null)
+            ApplyBlockSelection(_selectionAnchorEditor!, _selectionAnchorOffset, target, CharacterIndex(target, eventArgs.GetPosition(target)));
+        ReleaseMouseCapture();
+        _selectionAnchorEditor = null;
+        _dragSelectingAcrossBlocks = false;
+        eventArgs.Handled = true;
+    }
+
+    private bool HandleSelectionCommand(KeyEventArgs eventArgs)
+    {
+        var control = (Keyboard.Modifiers & ModifierKeys.Control) != 0;
+        if (control && eventArgs.Key == Key.A)
+        {
+            SelectAllBlocks();
+            eventArgs.Handled = true;
+            return true;
+        }
+
+        if (_hasCrossBlockSelection && control && eventArgs.Key == Key.C)
+        {
+            CopyCrossBlockSelection();
+            eventArgs.Handled = true;
+            return true;
+        }
+
+        if (_hasCrossBlockSelection && control && eventArgs.Key == Key.X)
+        {
+            CopyCrossBlockSelection();
+            ReplaceCrossBlockSelection(string.Empty);
+            eventArgs.Handled = true;
+            return true;
+        }
+
+        if (_hasCrossBlockSelection && eventArgs.Key is Key.Back or Key.Delete)
+        {
+            ReplaceCrossBlockSelection(string.Empty);
+            eventArgs.Handled = true;
+            return true;
+        }
+
+        if (_hasCrossBlockSelection && eventArgs.Key == Key.Enter)
+        {
+            var startBlock = _blocks[_selectionStartBlock];
+            var nextKind = startBlock.Kind is MarkdownLineKind.Bullet or MarkdownLineKind.Task ? startBlock.Kind : MarkdownLineKind.Paragraph;
+            ReplaceCrossBlockSelection(string.Empty);
+            var index = _blocks.IndexOf(startBlock) + 1;
+            AddBlock(new MarkdownLine(nextKind, string.Empty, Indent: startBlock.Indent), index);
+            _blocks[index].Editor.Focus();
+            eventArgs.Handled = true;
+            return true;
+        }
+
+        if (_hasCrossBlockSelection && eventArgs.Key is Key.Left or Key.Right or Key.Up or Key.Down or Key.Home or Key.End)
+            ClearCrossBlockSelection();
+        return false;
+    }
+
+    private void HandleCrossBlockPaste(object sender, DataObjectPastingEventArgs eventArgs)
+    {
+        if (!_hasCrossBlockSelection || !eventArgs.SourceDataObject.GetDataPresent(DataFormats.UnicodeText)) return;
+        var text = eventArgs.SourceDataObject.GetData(DataFormats.UnicodeText) as string;
+        if (text is null) return;
+        ReplaceCrossBlockSelection(text);
+        eventArgs.CancelCommand();
+    }
+
+    private void ApplyBlockSelection(TextBox anchor, int anchorOffset, TextBox target, int targetOffset)
+    {
+        var anchorIndex = FindBlockIndex(anchor);
+        var targetIndex = FindBlockIndex(target);
+        if (anchorIndex < 0 || targetIndex < 0) return;
+
+        foreach (var block in _blocks)
+            if (block.Kind != MarkdownLineKind.Image)
+                block.Editor.Select(0, 0);
+
+        var forward = anchorIndex < targetIndex || anchorIndex == targetIndex && anchorOffset <= targetOffset;
+        var startIndex = forward ? anchorIndex : targetIndex;
+        var endIndex = forward ? targetIndex : anchorIndex;
+        var startOffset = forward ? anchorOffset : targetOffset;
+        var endOffset = forward ? targetOffset : anchorOffset;
+
+        if (startIndex == endIndex)
+        {
+            _blocks[startIndex].Editor.Select(startOffset, Math.Max(0, endOffset - startOffset));
+            _hasCrossBlockSelection = false;
+            _selectionStartBlock = startIndex;
+            _selectionStartOffset = startOffset;
+            _selectionEndBlock = endIndex;
+            _selectionEndOffset = endOffset;
+            return;
+        }
+
+        var startEditor = _blocks[startIndex].Editor;
+        var endEditor = _blocks[endIndex].Editor;
+        startEditor.Select(Math.Clamp(startOffset, 0, startEditor.Text.Length), Math.Max(0, startEditor.Text.Length - startOffset));
+        for (var index = startIndex + 1; index < endIndex; index++)
+            if (_blocks[index].Kind != MarkdownLineKind.Image)
+                _blocks[index].Editor.SelectAll();
+        endEditor.Select(0, Math.Clamp(endOffset, 0, endEditor.Text.Length));
+
+        _hasCrossBlockSelection = true;
+        _selectionStartBlock = startIndex;
+        _selectionStartOffset = Math.Clamp(startOffset, 0, startEditor.Text.Length);
+        _selectionEndBlock = endIndex;
+        _selectionEndOffset = Math.Clamp(endOffset, 0, endEditor.Text.Length);
+    }
+
+    private void SelectAllBlocks()
+    {
+        ClearCrossBlockSelection();
+        var textBlocks = _blocks
+            .Select((block, index) => (block, index))
+            .Where(item => item.block.Kind != MarkdownLineKind.Image)
+            .ToList();
+        if (textBlocks.Count == 0) return;
+
+        foreach (var item in textBlocks)
+            item.block.Editor.SelectAll();
+        _selectionStartBlock = textBlocks[0].index;
+        _selectionStartOffset = 0;
+        _selectionEndBlock = textBlocks[^1].index;
+        _selectionEndOffset = textBlocks[^1].block.Editor.Text.Length;
+        _hasCrossBlockSelection = textBlocks.Count > 1;
+    }
+
+    private void CopyCrossBlockSelection()
+    {
+        if (!_hasCrossBlockSelection) return;
+        var lines = new List<string>();
+        for (var index = _selectionStartBlock; index <= _selectionEndBlock; index++)
+        {
+            var block = _blocks[index];
+            if (block.Editor is null) continue;
+            var start = index == _selectionStartBlock ? _selectionStartOffset : 0;
+            var end = index == _selectionEndBlock ? _selectionEndOffset : block.Editor.Text.Length;
+            if (end <= start) continue;
+            var selected = block.ToMarkdownLine() with { Text = block.Editor.Text[start..end] };
+            lines.Add(MarkdownDocumentService.SerializeLines(new[] { selected }));
+        }
+        if (lines.Count > 0) Clipboard.SetText(string.Join(Environment.NewLine, lines));
+    }
+
+    private void ReplaceCrossBlockSelection(string replacement)
+    {
+        if (!_hasCrossBlockSelection) return;
+        var startBlock = _blocks[_selectionStartBlock];
+        var endBlock = _blocks[_selectionEndBlock];
+        var prefix = startBlock.Editor.Text[.._selectionStartOffset];
+        var suffix = endBlock.Editor.Text[_selectionEndOffset..];
+        var replacementLines = replacement.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n').Split('\n');
+
+        _loading = true;
+        for (var index = _selectionEndBlock; index > _selectionStartBlock; index--)
+        {
+            _blocks.RemoveAt(index);
+            _panel.Children.RemoveAt(index);
+        }
+
+        startBlock.Editor.Text = prefix + replacementLines[0] + (replacementLines.Length == 1 ? suffix : string.Empty);
+        var caretBlock = startBlock;
+        var caret = prefix.Length + replacementLines[0].Length;
+        var insertIndex = _selectionStartBlock + 1;
+        for (var lineIndex = 1; lineIndex < replacementLines.Length; lineIndex++)
+        {
+            var line = replacementLines[lineIndex] + (lineIndex == replacementLines.Length - 1 ? suffix : string.Empty);
+            var newBlock = new MarkdownLine(startBlock.Kind, line, Indent: startBlock.Indent);
+            AddBlock(newBlock, insertIndex++);
+            caretBlock = _blocks[insertIndex - 1];
+            caret = replacementLines[lineIndex].Length;
+        }
+        _loading = false;
+        _hasCrossBlockSelection = false;
+        _selectionAnchorEditor = null;
+        caretBlock.Editor.Focus();
+        caretBlock.Editor.CaretIndex = Math.Clamp(caret, 0, caretBlock.Editor.Text.Length);
+        RaiseChanged();
+    }
+
+    private void ClearCrossBlockSelection()
+    {
+        if (!_hasCrossBlockSelection) return;
+        foreach (var block in _blocks)
+            if (block.Kind != MarkdownLineKind.Image)
+                block.Editor.Select(0, 0);
+        _hasCrossBlockSelection = false;
+    }
+
+    private int FindBlockIndex(TextBox editor) => _blocks.FindIndex(block => ReferenceEquals(block.Editor, editor));
+
+    private static TextBox? FindEditor(DependencyObject? source)
+    {
+        while (source is not null)
+        {
+            if (source is TextBox editor) return editor;
+            source = source is Visual visual ? VisualTreeHelper.GetParent(visual) : LogicalTreeHelper.GetParent(source);
+        }
+        return null;
+    }
+
+    private static int CharacterIndex(TextBox editor, Point point)
+    {
+        var index = editor.GetCharacterIndexFromPoint(point, false);
+        return Math.Clamp(index < 0 ? editor.Text.Length : index, 0, editor.Text.Length);
+    }
+
     private static bool IsInteractiveSource(DependencyObject? source)
     {
         while (source is not null)
@@ -133,10 +410,20 @@ public sealed class MarkdownBlockEditor : Border
             TextWrapping = TextWrapping.Wrap,
             AcceptsReturn = false
         };
+        block.Editor.IsInactiveSelectionHighlightEnabled = true;
+        block.Editor.SelectionBrush = _accent;
+        block.Editor.SelectionOpacity = .35;
         block.Editor.GotKeyboardFocus += (_, _) => _activeBlock = block;
         block.Editor.TextChanged += (_, _) => RaiseChanged();
+        block.Editor.PreviewTextInput += (_, eventArgs) =>
+        {
+            if (!_hasCrossBlockSelection) return;
+            ReplaceCrossBlockSelection(eventArgs.Text);
+            eventArgs.Handled = true;
+        };
         block.Editor.PreviewKeyDown += (_, eventArgs) =>
         {
+            if (HandleSelectionCommand(eventArgs)) return;
             if (eventArgs.Key == Key.Enter)
             {
                 eventArgs.Handled = true;
@@ -167,11 +454,21 @@ public sealed class MarkdownBlockEditor : Border
     {
         if (block.Kind == MarkdownLineKind.Image) return CreateImageHost(block);
         var row = new Grid { Margin = new Thickness(block.Indent * 18, 1, 0, 1), MinHeight = 32 };
-        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(30) });
-        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        block.Marker = CreateMarker(block);
-        row.Children.Add(block.Marker);
-        Grid.SetColumn(block.Editor, 1);
+        var hasMarker = block.Kind is MarkdownLineKind.Bullet or MarkdownLineKind.Task;
+        if (hasMarker)
+        {
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(30) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            block.Marker = CreateMarker(block);
+            row.Children.Add(block.Marker);
+            Grid.SetColumn(block.Editor, 1);
+        }
+        else
+        {
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            block.Marker = null;
+            Grid.SetColumn(block.Editor, 0);
+        }
         row.Children.Add(block.Editor);
         ApplyEditorTypography(block);
         return row;
@@ -194,9 +491,6 @@ public sealed class MarkdownBlockEditor : Border
         }
         var label = block.Kind switch
         {
-            MarkdownLineKind.Heading1 => "H1",
-            MarkdownLineKind.Heading2 => "H2",
-            MarkdownLineKind.Heading3 => "H3",
             MarkdownLineKind.Bullet => "•",
             _ => string.Empty
         };
@@ -290,7 +584,7 @@ public sealed class MarkdownBlockEditor : Border
             ImagePath = line.ImagePath;
             Editor = null!;
             Host = null!;
-            Marker = null!;
+            Marker = null;
         }
 
         public MarkdownLineKind Kind { get; set; }
@@ -299,7 +593,7 @@ public sealed class MarkdownBlockEditor : Border
         public string? ImagePath { get; }
         public TextBox Editor { get; set; }
         public UIElement Host { get; set; }
-        public UIElement Marker { get; set; }
+        public UIElement? Marker { get; set; }
 
         public MarkdownLine ToMarkdownLine() => new(Kind, Editor.Text, IsChecked, Indent, ImagePath);
     }
