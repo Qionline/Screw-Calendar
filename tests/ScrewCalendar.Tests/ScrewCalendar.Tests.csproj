@@ -8,6 +8,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\Shared\DesktopWidgets.Toolkit\DesktopWidgets.Toolkit.csproj" />
+    <PackageReference Include="AvalonEdit" />
     <PackageReference Include="Markdig" />
     <Compile Include="..\..\Models\CalendarState.cs" Link="Source\CalendarState.cs" />
     <Compile Include="..\..\Models\HolidayInfo.cs" Link="Source\HolidayInfo.cs" />

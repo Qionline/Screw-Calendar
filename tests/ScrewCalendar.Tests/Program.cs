@@ -7,11 +7,14 @@ using System.Text.Json;
 using System.Threading;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Documents;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Xml.Linq;
+using ICSharpCode.AvalonEdit;
 using ScrewCalendar;
 
 var tests = new (string Name, Action Run)[]
@@ -24,6 +27,7 @@ var tests = new (string Name, Action Run)[]
     ("Version 3 validation", TestValidation),
     ("Markdown documents", TestMarkdownDocuments),
     ("Normal editor formatting toolbar", TestNormalEditorFormattingToolbar),
+    ("Markdown image selection replacement", TestMarkdownImageSelectionReplacement),
     ("Archived Markdown images", TestMarkdownImageStore),
     ("Localization keys", TestLocalizationKeys),
     ("Calendar metadata", TestCalendarMetadata),
@@ -142,7 +146,7 @@ static void TestNormalEditorFormattingToolbar()
                 Brushes.Blue,
                 new FontFamily("Segoe UI"),
                 _ => null);
-            True(editor.Child is RichTextBox, "Markdown editor uses one native RichTextBox selection host");
+            True(editor.Child is TextEditor, "Markdown editor uses one native AvalonEdit selection host");
             editor.SetMarkdown("Toolbar test");
             editor.ApplyKind(MarkdownLineKind.Heading1);
             editor.ApplyKind(MarkdownLineKind.Heading2);
@@ -152,27 +156,25 @@ static void TestNormalEditorFormattingToolbar()
             True(editor.GetMarkdown().StartsWith("- [ ] Toolbar test", StringComparison.Ordinal), "Toolbar updates the active visual block without reparenting errors");
 
             editor.SetMarkdown("First\nSecond\nThird");
-            var richTextBox = (RichTextBox)editor.Child!;
-            var paragraphs = richTextBox.Document.Blocks.OfType<Paragraph>().ToList();
-            richTextBox.Selection.Select(paragraphs[0].ContentStart, paragraphs[^1].ContentEnd);
+            var textEditor = (TextEditor)editor.Child!;
+            textEditor.Select(0, textEditor.Document.TextLength);
             editor.ApplyKind(MarkdownLineKind.Task);
-            Equal(string.Join(Environment.NewLine, new[] { "- [ ] First", "- [ ] Second", "- [ ] Third" }), editor.GetMarkdown(), "Native selection formats every selected paragraph");
+            Equal(string.Join("\n", new[] { "- [ ] First", "- [ ] Second", "- [ ] Third" }), editor.GetMarkdown(), "Native selection formats every selected paragraph");
 
             editor.SetMarkdown("- [ ] First\n- [x] Second\n- Plain");
-            richTextBox = (RichTextBox)editor.Child!;
-            paragraphs = richTextBox.Document.Blocks.OfType<Paragraph>().ToList();
+            textEditor = (TextEditor)editor.Child!;
             var originalClipboard = Clipboard.GetDataObject();
             try
             {
-                richTextBox.Selection.Select(paragraphs[0].ContentStart, paragraphs[^1].ContentEnd);
-                ApplicationCommands.Copy.Execute(null, richTextBox);
-                Equal(string.Join(Environment.NewLine, new[] { "- [ ] First", "- [x] Second", "- Plain" }), Clipboard.GetText(), "Copy exports selected Markdown syntax");
+                textEditor.Select(0, textEditor.Document.TextLength);
+                textEditor.Copy();
+                Equal(string.Join("\n", new[] { "- [ ] First", "- [x] Second", "- Plain" }), Clipboard.GetText().Replace("\r\n", "\n", StringComparison.Ordinal), "Copy exports selected Markdown syntax");
 
                 var pasted = new MarkdownBlockEditor(Brushes.Black, Brushes.Gray, Brushes.White, Brushes.LightGray, Brushes.Blue, new FontFamily("Segoe UI"), _ => null);
                 pasted.SetMarkdown(string.Empty);
                 pasted.FocusEditor();
-                ApplicationCommands.Paste.Execute(null, (RichTextBox)pasted.Child!);
-                Equal(string.Join(Environment.NewLine, new[] { "- [ ] First", "- [x] Second", "- Plain" }), pasted.GetMarkdown(), "Paste restores Markdown block kinds");
+                ((TextEditor)pasted.Child!).Paste();
+                Equal(string.Join("\n", new[] { "- [ ] First", "- [x] Second", "- Plain" }), pasted.GetMarkdown().Replace("\r\n", "\n", StringComparison.Ordinal), "Paste restores Markdown block kinds");
             }
             finally
             {
@@ -189,6 +191,74 @@ static void TestNormalEditorFormattingToolbar()
     thread.Start();
     thread.Join();
     if (failure is not null) throw new InvalidOperationException("Normal editor toolbar failed.", failure);
+}
+
+static void TestMarkdownImageSelectionReplacement()
+{
+    Exception? failure = null;
+    var thread = new Thread(() =>
+    {
+        try
+        {
+            var editor = new MarkdownBlockEditor(
+                Brushes.Black,
+                Brushes.Gray,
+                Brushes.White,
+                Brushes.LightGray,
+                Brushes.Blue,
+                new FontFamily("Segoe UI"),
+                _ => BitmapSource.Create(
+                    2,
+                    1,
+                    96,
+                    96,
+                    PixelFormats.Bgra32,
+                    null,
+                    new byte[] { 12, 34, 56, 255, 78, 90, 123, 255 },
+                    8));
+            editor.ContentChanged += (_, _) => _ = editor.GetMarkdown();
+            editor.SetMarkdown("Before\n![test](assets/test.png)\nAfter");
+            var textEditor = (TextEditor)editor.Child!;
+            textEditor.SelectAll();
+            textEditor.Document.Replace(textEditor.SelectionStart, textEditor.SelectionLength, "replacement");
+            Equal("replacement", editor.GetMarkdown(), "Typing replaces a selection that contains an image");
+
+            editor.SetMarkdown("Before\n![test](assets/test.png)\nAfter");
+            textEditor = (TextEditor)editor.Child!;
+            var imageLine = textEditor.Document.Lines.Single(line => textEditor.Document.GetText(line.Offset, line.Length).StartsWith("![", StringComparison.Ordinal));
+            textEditor.Select(imageLine.Offset, imageLine.Length);
+            textEditor.Document.Replace(textEditor.SelectionStart, textEditor.SelectionLength, "replacement");
+            Equal(string.Join("\n", new[] { "Before", "replacement", "After" }), editor.GetMarkdown(), "Typing replaces an image-only selection without deleting the editor");
+
+            editor.SetMarkdown("Before\n![test](assets/test.png)\nAfter");
+            textEditor = (TextEditor)editor.Child!;
+            imageLine = textEditor.Document.Lines.Single(line => textEditor.Document.GetText(line.Offset, line.Length).StartsWith("![", StringComparison.Ordinal));
+            textEditor.Select(imageLine.Offset, imageLine.Length);
+            textEditor.Document.Remove(textEditor.SelectionStart, textEditor.SelectionLength);
+            True(!editor.GetMarkdown().Contains("assets/test.png", StringComparison.Ordinal), "Backspace removes an image-only selection");
+
+            editor.SetMarkdown("第一行\r\n- 项目\r\n# 标题\r\n\r\n![logo](assets/test.png)\r\n\r\n- [x] 已完成\r\n- [ ]");
+            using var visualHost = new HwndSource(new HwndSourceParameters("ScrewCalendarMarkdownEmptyTaskTest") { Width = 320, Height = 220 });
+            visualHost.RootVisual = editor;
+            editor.Measure(new Size(320, 220));
+            editor.Arrange(new Rect(0, 0, 320, 220));
+            editor.UpdateLayout();
+            textEditor.TextArea.TextView.EnsureVisualLines();
+            editor.FocusEditor();
+            Equal("- [ ]", textEditor.Document.GetText(textEditor.Document.Lines.Last().Offset, textEditor.Document.Lines.Last().Length), "Empty task line remains valid Markdown");
+
+            editor.SetMarkdown("Before\nAfter");
+            textEditor = (TextEditor)editor.Child!;
+            textEditor.CaretOffset = textEditor.Document.GetLineByNumber(1).EndOffset;
+            editor.AddImage("assets/test.png", "test");
+            Equal(string.Join("\n", new[] { "Before", "![test](assets/test.png)", "After" }), editor.GetMarkdown().Replace("\r\n", "\n", StringComparison.Ordinal), "Image insertion creates one source line without duplicate blank lines");
+        }
+        catch (Exception exception) { failure = exception; }
+    });
+    thread.SetApartmentState(ApartmentState.STA);
+    thread.Start();
+    if (!thread.Join(TimeSpan.FromSeconds(5))) throw new InvalidOperationException("Image selection replacement timed out");
+    if (failure is not null) throw new InvalidOperationException("Image selection replacement failed.", failure);
 }
 
 static void TestMarkdownImageStore()
@@ -217,7 +287,23 @@ static void TestMarkdownImageStore()
                 using (var stream = File.Create(original)) encoder.Save(stream);
                 var archived = store.Import(original);
                 File.Delete(original);
-                True(store.Load(archived) is not null, "Archived image survives deletion of its original file");
+                var decoded = store.Load(archived);
+                True(decoded is WriteableBitmap { IsFrozen: true }, "Archived image is loaded as a frozen public bitmap");
+
+                var editor = new MarkdownBlockEditor(Brushes.Black, Brushes.Gray, Brushes.White, Brushes.LightGray, Brushes.Blue, new FontFamily("Segoe UI"), store.Load);
+                editor.ContentChanged += (_, _) => _ = editor.GetMarkdown();
+                editor.SetMarkdown($"![test]({archived})");
+                var textEditor = (TextEditor)editor.Child!;
+                using var source = new HwndSource(new HwndSourceParameters("ScrewCalendarMarkdownImageTest") { Width = 640, Height = 480 });
+                source.RootVisual = editor;
+                editor.Measure(new Size(640, 480));
+                editor.Arrange(new Rect(0, 0, 640, 480));
+                editor.UpdateLayout();
+                textEditor.TextArea.TextView.EnsureVisualLines();
+                var remove = FindVisualChildren<Button>(editor).SingleOrDefault();
+                True(remove is not null, "Image is rendered as an AvalonEdit inline visual");
+                remove!.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+                True(!editor.GetMarkdown().Contains(archived, StringComparison.Ordinal), "Image button removes only the source reference line");
             }
             catch (Exception exception) { failure = exception; }
         });
@@ -303,6 +389,12 @@ static void TestReleaseMetadata()
     var thirdPartyNotices = File.ReadAllText(Path.Combine(repositoryDirectory, "THIRD_PARTY_NOTICES.md"));
     True(thirdPartyNotices.Contains($"## Markdig {markdigVersion}", StringComparison.Ordinal),
         "Third-party notice must match the centrally managed Markdig version");
+    var avalonEditVersion = packageVersions.Descendants("PackageVersion")
+        .Single(item => string.Equals(item.Attribute("Include")?.Value, "AvalonEdit", StringComparison.Ordinal))
+        .Attribute("Version")?.Value;
+    True(Version.TryParse(avalonEditVersion, out _), "AvalonEdit version must be centrally managed");
+    True(thirdPartyNotices.Contains($"## AvalonEdit {avalonEditVersion}", StringComparison.Ordinal),
+        "Third-party notice must match the centrally managed AvalonEdit version");
     True(!project.Descendants("PackageReference").Any(item => item.Attribute("Version") is not null),
         "Application package references should use central versions");
 
@@ -352,6 +444,17 @@ static void Equal<T>(T expected, T actual, string message)
 {
     if (!EqualityComparer<T>.Default.Equals(expected, actual))
         throw new InvalidOperationException($"{message}: expected {expected}, actual {actual}");
+}
+
+static IEnumerable<T> FindVisualChildren<T>(DependencyObject root) where T : DependencyObject
+{
+    if (root is null) yield break;
+    for (var index = 0; index < VisualTreeHelper.GetChildrenCount(root); index++)
+    {
+        var child = VisualTreeHelper.GetChild(root, index);
+        if (child is T match) yield return match;
+        foreach (var nested in FindVisualChildren<T>(child)) yield return nested;
+    }
 }
 
 static void Near(double expected, double actual, string message, double tolerance = 0.000001)

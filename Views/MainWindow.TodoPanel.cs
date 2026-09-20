@@ -186,7 +186,7 @@ public sealed partial class MainWindow
         if (!permanent && date.Date == _today.Date && _todayMarkdownPreviewSink is not null) return;
         _todoEditorActive = true;
         _windowLayerController.SetInteractive(true);
-        var editor = new MarkdownBlockEditor(Foreground(), Muted(), InputBackground(), Line(), Accent(), _uiFont, LoadMarkdownImage);
+        var editor = new MarkdownBlockEditor(Foreground(), Muted(), InputBackground(), Line(), Accent(), _uiFont, LoadMarkdownImage, MarkdownSelectionBrush());
         editor.SetMarkdown(GetMarkdownDocument(date, permanent));
 
         var host = new Grid();

@@ -6,10 +6,19 @@
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-09-20
+
 ### Changed
 
+- Markdown 待办编辑器改用单一 AvalonEdit 文档，支持稳定的跨行选区、撤销、复制粘贴和任务类型继承。
+- 统一 Markdown 编辑器和预览区域的选区颜色、列表圆点和任务复选框样式。
 - 增加一键发布前检查脚本，统一本地验证、发布 SDK 和 Git 标签推送流程。
 - CI 与 Release 固定使用已验证的 .NET SDK 8.0.425，避免滚动 SDK 造成锁文件不一致。
+
+### Fixed
+
+- 修复包含图片、空任务项或多种 Markdown 块时编辑器聚焦、删除和输入可能导致闪退的问题。
+- 修复编辑模式复选框尺寸裁切，以及浅色模式选区边框过深的问题。
 
 ## [1.0.0] - 2026-09-20
 
@@ -40,6 +49,7 @@
 - 简体中文和英文界面。
 - 开源仓库规范、自动化回归测试、持续集成和版本发布流程。
 
-[Unreleased]: https://github.com/Qionline/Screw-Calendar/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/Qionline/Screw-Calendar/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/Qionline/Screw-Calendar/releases/tag/v1.0.1
 [1.0.0]: https://github.com/Qionline/Screw-Calendar/releases/tag/v1.0.0
 [0.1.0]: https://github.com/Qionline/Screw-Calendar/releases/tag/v0.1.0

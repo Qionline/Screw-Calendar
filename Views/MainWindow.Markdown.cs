@@ -187,7 +187,7 @@ public sealed partial class MainWindow
             Padding = new Thickness(0),
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-            SelectionBrush = Accent()
+            SelectionBrush = MarkdownSelectionBrush()
         };
         viewer.Resources.Add(typeof(System.Windows.Controls.Primitives.ScrollBar), MinimalScrollBarStyle());
         return viewer;

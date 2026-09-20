@@ -51,8 +51,9 @@ public sealed class MarkdownImageStore
         if (!fullPath.StartsWith(assetsRoot, StringComparison.OrdinalIgnoreCase) || !File.Exists(fullPath)) return null;
         using var stream = File.OpenRead(fullPath);
         var decoder = BitmapDecoder.Create(stream, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad);
-        var frame = decoder.Frames[0];
-        frame.Freeze();
-        return frame;
+        var decoded = decoder.Frames[0];
+        var bitmap = new WriteableBitmap(decoded);
+        bitmap.Freeze();
+        return bitmap;
     }
 }

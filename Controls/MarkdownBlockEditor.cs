@@ -1,27 +1,35 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
-using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using ICSharpCode.AvalonEdit;
+using ICSharpCode.AvalonEdit.Document;
+using ICSharpCode.AvalonEdit.Rendering;
 
 namespace ScrewCalendar;
 
 /// <summary>
-/// Markdown editor backed by one native WPF RichTextBox.
+/// Markdown editor backed by one AvalonEdit TextDocument.
 ///
-/// A single editing surface owns the caret and selection. This deliberately
-/// avoids stitching together independent text boxes, so native WPF handles
-/// drag selection, Ctrl+A, copy, paste, deletion, and replacement across
-/// every paragraph.
+/// The document text is the single source of truth. Markdown decorations and
+/// images are rendered by AvalonEdit visual layers, so normal selection,
+/// multiline editing, clipboard operations and undo never depend on a WPF
+/// FlowDocument tree.
 /// </summary>
 public sealed class MarkdownBlockEditor : Border
 {
-    private readonly RichTextBox _editor;
+    private static readonly Regex ImageLine = new(@"^!\[(.*?)\]\((.*?)\)\s*$", RegexOptions.Compiled);
+    private static readonly Regex TaskLine = new(@"^(\s*)[-*+]\s+\[([ xX])\]\s*(.*)$", RegexOptions.Compiled);
+    private static readonly Regex BulletLine = new(@"^(\s*)[-*+]\s+(.+)$", RegexOptions.Compiled);
+    private static readonly Regex HeadingLine = new(@"^(\s*)(#{1,3})\s+(.+)$", RegexOptions.Compiled);
+
+    private readonly TextEditor _editor;
     private readonly Brush _foreground;
     private readonly Brush _muted;
     private readonly Brush _surface;
@@ -29,15 +37,22 @@ public sealed class MarkdownBlockEditor : Border
     private readonly Brush _accent;
     private readonly FontFamily _fontFamily;
     private readonly Func<string, BitmapSource?> _imageLoader;
-    private readonly Dictionary<Paragraph, ParagraphMetadata> _paragraphMetadata = [];
-    private readonly Dictionary<BlockUIContainer, ImageMetadata> _imageMetadata = [];
+    private readonly MarkdownVisualGenerator _visualGenerator;
+    private readonly MarkdownColorizer _colorizer;
     private bool _loading;
     private bool _enterNormalizationScheduled;
-    private Paragraph? _pendingEnterSource;
     private MarkdownLineKind? _pendingEnterKind;
     private int _pendingEnterIndent;
 
-    public MarkdownBlockEditor(Brush foreground, Brush muted, Brush surface, Brush line, Brush accent, FontFamily fontFamily, Func<string, BitmapSource?> imageLoader)
+    public MarkdownBlockEditor(
+        Brush foreground,
+        Brush muted,
+        Brush surface,
+        Brush line,
+        Brush accent,
+        FontFamily fontFamily,
+        Func<string, BitmapSource?> imageLoader,
+        Brush? selectionBrush = null)
     {
         _foreground = foreground;
         _muted = muted;
@@ -53,45 +68,77 @@ public sealed class MarkdownBlockEditor : Border
         CornerRadius = new CornerRadius(7);
         Padding = new Thickness(10, 8, 10, 8);
 
-        _editor = new RichTextBox
+        _editor = new TextEditor
         {
             Background = Brushes.Transparent,
-            BorderThickness = new Thickness(0),
             Foreground = foreground,
             FontFamily = fontFamily,
             FontSize = 14,
             Padding = new Thickness(4, 3, 4, 3),
-            AcceptsTab = true,
-            IsDocumentEnabled = true,
             AllowDrop = true,
+            ShowLineNumbers = false,
+            WordWrap = true,
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-            SelectionBrush = accent,
-            SelectionOpacity = .35,
-            IsInactiveSelectionHighlightEnabled = true
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled
         };
-        _editor.Document = new FlowDocument
-        {
-            PagePadding = new Thickness(0),
-            FontFamily = fontFamily,
-            FontSize = 14,
-            Foreground = foreground
-        };
+        _editor.Options.EnableImeSupport = true;
+        _editor.Options.EnableHyperlinks = true;
+        _editor.Options.EnableEmailHyperlinks = false;
+        _editor.Options.ConvertTabsToSpaces = false;
+        _editor.Options.IndentationSize = 2;
+        _editor.TextArea.SelectionBrush = selectionBrush ?? CreateFallbackSelectionBrush(accent, surface);
+        _editor.TextArea.SelectionForeground = foreground;
+        // AvalonEdit draws a separate selection outline by default. It uses
+        // the system highlight pen, which is why a dark blue hairline remains
+        // around an otherwise light selection fill. The fill is sufficient for
+        // this editor, so make that outline fully transparent.
+        var transparentSelectionBorder = new Pen(Brushes.Transparent, 0);
+        transparentSelectionBorder.Freeze();
+        _editor.TextArea.SelectionBorder = transparentSelectionBorder;
+        _editor.TextArea.SelectionCornerRadius = 0;
+        _editor.TextArea.Caret.CaretBrush = accent;
         if (Application.Current?.TryFindResource("ToolkitMinimalScrollBarStyle") is Style scrollBarStyle)
             _editor.Resources.Add(typeof(ScrollBar), scrollBarStyle);
 
+        _visualGenerator = new MarkdownVisualGenerator(this);
+        _colorizer = new MarkdownColorizer(_foreground, _muted, _accent, _fontFamily);
+        _editor.TextArea.TextView.ElementGenerators.Add(_visualGenerator);
+        _editor.TextArea.TextView.LineTransformers.Add(_colorizer);
+
         _editor.TextChanged += (_, _) =>
         {
-            PruneMetadata();
+            if (_loading) return;
             ScheduleEnterNormalization();
             RaiseChanged();
         };
         _editor.PreviewKeyDown += TrackEnterInheritance;
-        _editor.CommandBindings.Add(new CommandBinding(ApplicationCommands.Copy, HandleCopyCommand));
-        _editor.CommandBindings.Add(new CommandBinding(ApplicationCommands.Cut, HandleCutCommand));
-        _editor.CommandBindings.Add(new CommandBinding(ApplicationCommands.Paste, HandlePasteCommand));
         Child = _editor;
     }
+
+    private static Brush CreateFallbackSelectionBrush(Brush accent, Brush surface)
+    {
+        if (accent is not SolidColorBrush accentBrush || surface is not SolidColorBrush surfaceBrush)
+            return accent;
+
+        // AvalonEdit expects an opaque selection fill. Keep the existing accent
+        // on dark surfaces; on light surfaces, blend a small amount of the
+        // current accent into the editor surface so selected text stays readable.
+        var surfaceColor = surfaceBrush.Color;
+        var surfaceLuminance = (0.2126 * surfaceColor.R + 0.7152 * surfaceColor.G + 0.0722 * surfaceColor.B) / 255.0;
+        if (surfaceLuminance < 0.5)
+            return new SolidColorBrush(accentBrush.Color);
+
+        const double accentAmount = 0.14;
+        var accentColor = accentBrush.Color;
+        var blended = Color.FromRgb(
+            BlendChannel(surfaceColor.R, accentColor.R, accentAmount),
+            BlendChannel(surfaceColor.G, accentColor.G, accentAmount),
+            BlendChannel(surfaceColor.B, accentColor.B, accentAmount));
+        return new SolidColorBrush(blended);
+    }
+
+    private static byte BlendChannel(byte from, byte to, double amount) =>
+        (byte)Math.Round(from + (to - from) * amount);
 
     public event EventHandler? ContentChanged;
 
@@ -99,104 +146,127 @@ public sealed class MarkdownBlockEditor : Border
     {
         ClearPendingEnterNormalization();
         _loading = true;
-        _editor.Document.Blocks.Clear();
-        _paragraphMetadata.Clear();
-        _imageMetadata.Clear();
-
-        foreach (var line in MarkdownDocumentService.ParseLines(markdown))
+        try
         {
-            if (line.Kind == MarkdownLineKind.Image)
-                _editor.Document.Blocks.Add(CreateImageBlock(line.ImagePath ?? string.Empty, line.Text));
-            else
-                _editor.Document.Blocks.Add(CreateParagraph(line));
+            var value = markdown ?? string.Empty;
+            _editor.Document.BeginUpdate();
+            try
+            {
+                _editor.Document.Replace(0, _editor.Document.TextLength, value);
+            }
+            finally
+            {
+                _editor.Document.EndUpdate();
+            }
+
+            _editor.Document.UndoStack.ClearAll();
+            _editor.Select(0, 0);
         }
-
-        if (_editor.Document.Blocks.Count == 0)
-            _editor.Document.Blocks.Add(CreateParagraph(new MarkdownLine(MarkdownLineKind.Paragraph, string.Empty)));
-        _loading = false;
+        finally
+        {
+            _loading = false;
+        }
+        _editor.TextArea.TextView.Redraw();
     }
 
-    public string GetMarkdown()
-    {
-        var snapshot = BuildSourceDocument();
-        return MarkdownDocumentService.SerializeLines(snapshot.Lines.Select(item => item.Line));
-    }
+    public string GetMarkdown() => _editor.Text.TrimEnd('\r', '\n');
 
     public void ApplyKind(MarkdownLineKind kind)
     {
-        if (kind == MarkdownLineKind.Image) return;
+        if (kind == MarkdownLineKind.Image || _editor.Document.TextLength == 0) return;
 
-        var selected = GetSelectedParagraphs();
-        if (selected.Count == 0)
-        {
-            var paragraph = GetCurrentParagraph() ?? CreateParagraph(new MarkdownLine(MarkdownLineKind.Paragraph, string.Empty));
-            if (!_editor.Document.Blocks.Contains(paragraph)) _editor.Document.Blocks.Add(paragraph);
-            selected = [paragraph];
-        }
+        var selectionStart = _editor.SelectionStart;
+        var selectionEnd = selectionStart + _editor.SelectionLength;
+        var firstLine = _editor.Document.GetLineByOffset(Math.Min(selectionStart, _editor.Document.TextLength));
+        var lastOffset = selectionEnd > selectionStart
+            ? Math.Max(selectionStart, Math.Min(selectionEnd - 1, _editor.Document.TextLength))
+            : selectionStart;
+        var lastLine = _editor.Document.GetLineByOffset(lastOffset);
+        var replaceStart = firstLine.Offset;
+        var replaceEnd = lastLine.EndOffset;
+        var source = _editor.Document.GetText(replaceStart, replaceEnd - replaceStart);
+        var newline = source.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n";
+        var lines = source.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
+        var formatted = string.Join(newline, lines.Select(line => FormatLine(line, kind)));
 
-        var selectionStart = selected[0].ContentStart;
-        var selectionEnd = selected[^1].ContentEnd;
-        _loading = true;
-        foreach (var paragraph in selected)
+        _editor.Document.BeginUpdate();
+        try
         {
-            var metadata = GetParagraphMetadata(paragraph);
-            var text = ExtractParagraphText(paragraph, metadata.Kind);
-            metadata.Kind = kind;
-            if (kind != MarkdownLineKind.Task) metadata.IsChecked = false;
-            ReplaceParagraphContent(paragraph, metadata, text);
+            _editor.Document.Replace(replaceStart, replaceEnd - replaceStart, formatted);
         }
-        _loading = false;
-        RestoreSelection(selectionStart, selectionEnd);
+        finally
+        {
+            _editor.Document.EndUpdate();
+        }
+        _editor.Select(replaceStart, formatted.Length);
         RaiseChanged();
     }
 
     public void AddImage(string relativePath, string altText = "image")
     {
-        var current = GetCurrentBlock();
-        var block = CreateImageBlock(relativePath, altText);
-        if (current is null)
+        if (string.IsNullOrWhiteSpace(relativePath)) return;
+        var reference = MarkdownDocumentService.SerializeLine(
+            new MarkdownLine(MarkdownLineKind.Image, altText ?? "image", ImagePath: relativePath));
+        var start = _editor.SelectionStart;
+        var length = _editor.SelectionLength;
+
+        _editor.Document.BeginUpdate();
+        try
         {
-            _editor.Document.Blocks.Add(block);
-        }
-        else
-        {
-            var blocks = _editor.Document.Blocks.ToList();
-            var currentIndex = blocks.IndexOf(current);
-            if (currentIndex < 0 || currentIndex == blocks.Count - 1)
-                _editor.Document.Blocks.Add(block);
+            if (length > 0)
+            {
+                _editor.Document.Replace(start, length, reference);
+            }
+            else if (_editor.Document.TextLength == 0)
+            {
+                _editor.Document.Insert(0, reference);
+                start = 0;
+            }
             else
-                _editor.Document.Blocks.InsertBefore(blocks[currentIndex + 1], block);
+            {
+                var line = _editor.Document.GetLineByOffset(Math.Min(_editor.CaretOffset, _editor.Document.TextLength));
+                var newline = DetectNewline();
+                var before = line.Length > 0 ? newline : string.Empty;
+                var insertion = before + reference;
+                var insertionOffset = line.EndOffset;
+                _editor.Document.Insert(insertionOffset, insertion);
+                start = insertionOffset + before.Length;
+            }
         }
-        block.BringIntoView();
+        finally
+        {
+            _editor.Document.EndUpdate();
+        }
+
+        _editor.Select(start + reference.Length, 0);
+        _editor.TextArea.Caret.BringCaretToView();
         RaiseChanged();
     }
 
     public void FocusEditor()
     {
-        var paragraph = _editor.Document.Blocks.OfType<Paragraph>().LastOrDefault();
-        if (paragraph is null)
-        {
-            paragraph = CreateParagraph(new MarkdownLine(MarkdownLineKind.Paragraph, string.Empty));
-            _editor.Document.Blocks.Add(paragraph);
-        }
         _editor.Focus();
-        _editor.CaretPosition = paragraph.ContentEnd;
+        _editor.Select(_editor.Document.TextLength, 0);
+        _editor.TextArea.Caret.BringCaretToView();
     }
 
-    private void TrackEnterInheritance(object sender, KeyEventArgs eventArgs)
+    private void TrackEnterInheritance(object? sender, KeyEventArgs eventArgs)
     {
-        if (eventArgs.Key != Key.Enter || Keyboard.Modifiers != ModifierKeys.None) return;
-        if (_editor.Selection.Start.CompareTo(_editor.Selection.End) != 0) return;
+        if (eventArgs.Handled || eventArgs.Key != Key.Enter || Keyboard.Modifiers != ModifierKeys.None) return;
+        if (_editor.SelectionLength != 0) return;
 
-        var paragraph = GetCurrentParagraph();
-        if (paragraph is null) return;
-        var metadata = GetParagraphMetadata(paragraph);
-        if (metadata.Kind is not (MarkdownLineKind.Bullet or MarkdownLineKind.Task)) return;
-
-        _pendingEnterSource = paragraph;
-        _pendingEnterKind = metadata.Kind;
-        _pendingEnterIndent = metadata.Indent;
-        _enterNormalizationScheduled = false;
+        var line = _editor.Document.GetLineByOffset(Math.Min(_editor.CaretOffset, _editor.Document.TextLength));
+        var source = _editor.Document.GetText(line.Offset, line.Length);
+        if (TryReadLine(source, out var parsed) && parsed.Kind is MarkdownLineKind.Bullet or MarkdownLineKind.Task)
+        {
+            _pendingEnterKind = parsed.Kind;
+            _pendingEnterIndent = parsed.Indent;
+            _enterNormalizationScheduled = false;
+        }
+        else
+        {
+            ClearPendingEnterNormalization();
+        }
     }
 
     private void ScheduleEnterNormalization()
@@ -205,213 +275,273 @@ public sealed class MarkdownBlockEditor : Border
         _enterNormalizationScheduled = true;
         Dispatcher.BeginInvoke(
             System.Windows.Threading.DispatcherPriority.Background,
-            new Action(NormalizeInheritedParagraph));
+            new Action(NormalizeInheritedLine));
     }
 
-    private void NormalizeInheritedParagraph()
+    private void NormalizeInheritedLine()
     {
         _enterNormalizationScheduled = false;
         var kind = _pendingEnterKind;
-        var source = _pendingEnterSource;
         var indent = _pendingEnterIndent;
         ClearPendingEnterNormalization();
-        if (kind is null || source is null || _loading) return;
+        if (kind is null || _loading) return;
 
-        var target = GetCurrentParagraph();
-        if (target is null || ReferenceEquals(target, source)) return;
+        var line = _editor.Document.GetLineByOffset(Math.Min(_editor.CaretOffset, _editor.Document.TextLength));
+        var source = _editor.Document.GetText(line.Offset, line.Length);
+        if (TryReadLine(source, out var parsed) && parsed.Kind is MarkdownLineKind.Bullet or MarkdownLineKind.Task) return;
 
-        var metadata = GetParagraphMetadata(target);
-        var text = ExtractParagraphText(target, metadata.Kind);
-        metadata.Kind = kind.Value;
-        metadata.Indent = indent;
-        metadata.IsChecked = false;
-        _loading = true;
-        ReplaceParagraphContent(target, metadata, text);
-        _loading = false;
+        var content = source.TrimStart();
+        var formatted = MarkdownDocumentService.SerializeLine(
+            new MarkdownLine(kind.Value, content, IsChecked: false, Indent: indent));
+        if (string.Equals(source, formatted, StringComparison.Ordinal)) return;
+
+        _editor.Document.Replace(line.Offset, line.Length, formatted);
+        _editor.CaretOffset = line.Offset + formatted.Length;
         RaiseChanged();
     }
 
     private void ClearPendingEnterNormalization()
     {
-        _pendingEnterSource = null;
         _pendingEnterKind = null;
         _pendingEnterIndent = 0;
         _enterNormalizationScheduled = false;
     }
 
-    private void HandleCopyCommand(object sender, ExecutedRoutedEventArgs eventArgs)
-    {
-        if (_editor.Selection.Start.CompareTo(_editor.Selection.End) == 0) return;
-        var markdown = GetSelectedMarkdown();
-        if (markdown is null) return;
+    private string DetectNewline() => _editor.Text.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : Environment.NewLine;
 
+    private static string FormatLine(string source, MarkdownLineKind kind)
+    {
+        if (string.IsNullOrWhiteSpace(source)) return string.Empty;
+        if (!TryReadLine(source, out var parsed))
+            parsed = new MarkdownLine(MarkdownLineKind.Paragraph, source.Trim());
+        if (parsed.Kind == MarkdownLineKind.Image) return source;
+        return MarkdownDocumentService.SerializeLine(
+            new MarkdownLine(kind, parsed.Text, kind == MarkdownLineKind.Task && parsed.IsChecked, parsed.Indent));
+    }
+
+    private static bool TryReadLine(string source, out MarkdownLine line)
+    {
+        var parsed = MarkdownDocumentService.ParseLines(source).FirstOrDefault();
+        if (parsed is null)
+        {
+            line = new MarkdownLine(MarkdownLineKind.Paragraph, source.Trim());
+            return false;
+        }
+        line = parsed;
+        return true;
+    }
+
+    private void ToggleTask(TextAnchor anchor, bool isChecked)
+    {
+        if (anchor.IsDeleted) return;
+        var line = _editor.Document.GetLineByOffset(Math.Min(anchor.Offset, _editor.Document.TextLength));
+        var source = _editor.Document.GetText(line.Offset, line.Length);
+        var match = TaskLine.Match(source);
+        if (!match.Success) return;
+        var markerStart = line.Offset + match.Groups[1].Length + 2;
+        if (markerStart + 1 >= _editor.Document.TextLength) return;
+
+        _editor.Document.BeginUpdate();
         try
         {
-            Clipboard.SetText(markdown);
-            eventArgs.Handled = true;
+            _editor.Document.Replace(markerStart + 1, 1, isChecked ? "x" : " ");
         }
-        catch (Exception exception)
+        finally
         {
-            AppLogger.Error("Failed to copy Markdown selection.", exception);
+            _editor.Document.EndUpdate();
         }
-    }
-
-    private void HandleCutCommand(object sender, ExecutedRoutedEventArgs eventArgs)
-    {
-        if (_editor.Selection.Start.CompareTo(_editor.Selection.End) == 0) return;
-        var markdown = GetSelectedMarkdown();
-        if (markdown is null) return;
-
-        try
-        {
-            Clipboard.SetText(markdown);
-            ReplaceSelectedMarkdown(string.Empty);
-            eventArgs.Handled = true;
-        }
-        catch (Exception exception)
-        {
-            AppLogger.Error("Failed to cut Markdown selection.", exception);
-        }
-    }
-
-    private void HandlePasteCommand(object sender, ExecutedRoutedEventArgs eventArgs)
-    {
-        if (Clipboard.ContainsImage() || Clipboard.ContainsFileDropList() || !Clipboard.ContainsText()) return;
-
-        try
-        {
-            ReplaceSelectedMarkdown(Clipboard.GetText());
-            eventArgs.Handled = true;
-        }
-        catch (Exception exception)
-        {
-            AppLogger.Error("Failed to paste Markdown text.", exception);
-        }
-    }
-
-    private string? GetSelectedMarkdown()
-    {
-        var snapshot = BuildSourceDocument();
-        if (snapshot.Lines.Count == 0) return null;
-
-        var start = GetSourceOffset(snapshot, _editor.Selection.Start);
-        var end = GetSourceOffset(snapshot, _editor.Selection.End);
-        if (start > end) (start, end) = (end, start);
-        return snapshot.Text[Math.Clamp(start, 0, snapshot.Text.Length)..Math.Clamp(end, 0, snapshot.Text.Length)];
-    }
-
-    private void ReplaceSelectedMarkdown(string replacement)
-    {
-        var snapshot = BuildSourceDocument();
-        if (snapshot.Lines.Count == 0) return;
-
-        var start = GetSourceOffset(snapshot, _editor.Selection.Start);
-        var end = GetSourceOffset(snapshot, _editor.Selection.End);
-        if (start > end) (start, end) = (end, start);
-        start = Math.Clamp(start, 0, snapshot.Text.Length);
-        end = Math.Clamp(end, start, snapshot.Text.Length);
-        var normalized = replacement
-            .Replace("\r\n", "\n", StringComparison.Ordinal)
-            .Replace('\r', '\n')
-            .Replace("\n", Environment.NewLine, StringComparison.Ordinal);
-        var updated = snapshot.Text[..start] + normalized + snapshot.Text[end..];
-
-        _loading = true;
-        SetMarkdown(updated);
-        _loading = false;
-        RestoreCaretAtSourceOffset(start + normalized.Length);
         RaiseChanged();
     }
 
-    private Paragraph CreateParagraph(MarkdownLine line)
+    private void RemoveImage(TextAnchor anchor, int sourceLength)
     {
-        var paragraph = new Paragraph();
-        var metadata = new ParagraphMetadata(line.Kind, line.IsChecked, line.Indent);
-        _paragraphMetadata[paragraph] = metadata;
-        ReplaceParagraphContent(paragraph, metadata, line.Text);
-        return paragraph;
-    }
+        if (anchor.IsDeleted) return;
+        var line = _editor.Document.GetLineByOffset(Math.Min(anchor.Offset, _editor.Document.TextLength));
+        if (line.Length != sourceLength || !ImageLine.IsMatch(_editor.Document.GetText(line.Offset, line.Length))) return;
 
-    private void ReplaceParagraphContent(Paragraph paragraph, ParagraphMetadata metadata, string text)
-    {
-        paragraph.Inlines.Clear();
-        ApplyParagraphTypography(paragraph, metadata);
-
-        if (metadata.Kind == MarkdownLineKind.Bullet)
+        var start = line.Offset;
+        var length = line.Length;
+        if (line.NextLine is not null)
         {
-            paragraph.Inlines.Add(new Run("• ")
-            {
-                Foreground = _accent,
-                FontWeight = FontWeights.SemiBold
-            });
+            length += line.DelimiterLength;
         }
-        else if (metadata.Kind == MarkdownLineKind.Task)
+        else if (line.PreviousLine is not null)
         {
-            var checkbox = CreateTaskCheckBox(paragraph, metadata);
-            paragraph.Inlines.Add(new InlineUIContainer(checkbox)
-            {
-                BaselineAlignment = BaselineAlignment.Center
-            });
-            paragraph.Inlines.Add(new Run(" "));
+            start -= line.PreviousLine.DelimiterLength;
+            length += line.PreviousLine.DelimiterLength;
         }
 
-        paragraph.Inlines.Add(new Run(text ?? string.Empty));
+        _editor.Document.BeginUpdate();
+        try
+        {
+            _editor.Document.Remove(start, length);
+        }
+        finally
+        {
+            _editor.Document.EndUpdate();
+        }
+        _editor.CaretOffset = Math.Min(start, _editor.Document.TextLength);
+        _editor.Focus();
+        RaiseChanged();
     }
 
-    private CheckBox CreateTaskCheckBox(Paragraph paragraph, ParagraphMetadata metadata)
+    private void RaiseChanged()
+    {
+        if (!_loading) ContentChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private sealed class MarkdownVisualGenerator : VisualLineElementGenerator
+    {
+        private readonly MarkdownBlockEditor _owner;
+
+        public MarkdownVisualGenerator(MarkdownBlockEditor owner) => _owner = owner;
+
+        public override int GetFirstInterestedOffset(int startOffset)
+        {
+            var document = CurrentContext.Document;
+            for (var line = CurrentContext.VisualLine.FirstDocumentLine;
+                 line is not null && line.LineNumber <= CurrentContext.VisualLine.LastDocumentLine.LineNumber;
+                 line = line.NextLine)
+            {
+                var source = document.GetText(line.Offset, line.Length);
+                var candidate = PrefixOffset(line, source, out _);
+                if (candidate >= startOffset) return candidate;
+            }
+            return -1;
+        }
+
+        public override VisualLineElement? ConstructElement(int offset)
+        {
+            var document = CurrentContext.Document;
+            if (document.TextLength == 0 || offset < 0 || offset >= document.TextLength) return null;
+            var line = document.GetLineByOffset(offset);
+            var source = document.GetText(line.Offset, line.Length);
+            var candidate = PrefixOffset(line, source, out var kind);
+            if (candidate != offset) return null;
+
+            if (kind == MarkdownLineKind.Image)
+            {
+                var match = ImageLine.Match(source);
+                if (!match.Success) return null;
+                var anchor = document.CreateAnchor(line.Offset);
+                anchor.SurviveDeletion = true;
+                return new InlineObjectElement(line.Length, _owner.CreateImageHost(anchor, line.Length, match.Groups[1].Value, match.Groups[2].Value));
+            }
+
+            if (kind == MarkdownLineKind.Task)
+            {
+                var match = TaskLine.Match(source);
+                if (!match.Success) return null;
+                var anchor = document.CreateAnchor(line.Offset);
+                anchor.SurviveDeletion = true;
+                var checkbox = _owner.CreateTaskCheckBox(anchor, match.Groups[2].Value.Equals("x", StringComparison.OrdinalIgnoreCase));
+                var markerLength = match.Groups[0].Length - match.Groups[3].Length;
+                return new InlineObjectElement(markerLength, checkbox);
+            }
+
+            if (kind == MarkdownLineKind.Bullet)
+            {
+                var match = BulletLine.Match(source);
+                if (!match.Success) return null;
+                var markerLength = match.Groups[0].Length - match.Groups[2].Length;
+                return new InlineObjectElement(markerLength, new TextBlock
+                {
+                    Text = "• ",
+                    Foreground = _owner._foreground,
+                    FontWeight = FontWeights.SemiBold,
+                    FontFamily = _owner._fontFamily,
+                    FontSize = 14,
+                    VerticalAlignment = VerticalAlignment.Center
+                });
+            }
+
+            if (kind is MarkdownLineKind.Heading1 or MarkdownLineKind.Heading2 or MarkdownLineKind.Heading3)
+            {
+                var match = HeadingLine.Match(source);
+                if (!match.Success) return null;
+                var markerLength = match.Groups[0].Length - match.Groups[3].Length;
+                return new InlineObjectElement(markerLength, new Border
+                {
+                    Width = 0,
+                    Height = 0,
+                    Background = Brushes.Transparent
+                });
+            }
+
+            return null;
+        }
+
+        private static int PrefixOffset(DocumentLine line, string source, out MarkdownLineKind kind)
+        {
+            var image = ImageLine.Match(source);
+            if (image.Success)
+            {
+                kind = MarkdownLineKind.Image;
+                return line.Offset;
+            }
+
+            var task = TaskLine.Match(source);
+            if (task.Success)
+            {
+                kind = MarkdownLineKind.Task;
+                return line.Offset + task.Groups[1].Length;
+            }
+
+            var bullet = BulletLine.Match(source);
+            if (bullet.Success)
+            {
+                kind = MarkdownLineKind.Bullet;
+                return line.Offset + bullet.Groups[1].Length;
+            }
+
+            var heading = HeadingLine.Match(source);
+            if (heading.Success)
+            {
+                kind = heading.Groups[2].Length switch
+                {
+                    1 => MarkdownLineKind.Heading1,
+                    2 => MarkdownLineKind.Heading2,
+                    _ => MarkdownLineKind.Heading3
+                };
+                return line.Offset + heading.Groups[1].Length;
+            }
+
+            kind = MarkdownLineKind.Paragraph;
+            return -1;
+        }
+    }
+
+    private CheckBox CreateTaskCheckBox(TextAnchor anchor, bool isChecked)
     {
         var checkbox = new CheckBox
         {
-            IsChecked = metadata.IsChecked,
+            IsChecked = isChecked,
+            Width = 18,
+            Height = 18,
+            Margin = new Thickness(0, 0, 7, -2),
             VerticalAlignment = VerticalAlignment.Center,
             Focusable = true,
             ToolTip = "完成任务",
             Style = Application.Current?.TryFindResource("ToolkitRoundedCheckBoxStyle") as Style
         };
-        checkbox.Checked += (_, _) => UpdateTaskState(paragraph, metadata, true);
-        checkbox.Unchecked += (_, _) => UpdateTaskState(paragraph, metadata, false);
+        checkbox.Checked += (_, _) => ToggleTask(anchor, true);
+        checkbox.Unchecked += (_, _) => ToggleTask(anchor, false);
         return checkbox;
     }
 
-    private void UpdateTaskState(Paragraph paragraph, ParagraphMetadata metadata, bool isChecked)
+    private UIElement CreateImageHost(TextAnchor anchor, int sourceLength, string altText, string relativePath)
     {
-        metadata.IsChecked = isChecked;
-        ApplyParagraphTypography(paragraph, metadata);
-        RaiseChanged();
-    }
-
-    private void ApplyParagraphTypography(Paragraph paragraph, ParagraphMetadata metadata)
-    {
-        paragraph.Margin = new Thickness(metadata.Indent * 18, metadata.Kind is MarkdownLineKind.Heading1 or MarkdownLineKind.Heading2 or MarkdownLineKind.Heading3 ? 4 : 1, 0, metadata.Kind is MarkdownLineKind.Heading1 or MarkdownLineKind.Heading2 or MarkdownLineKind.Heading3 ? 5 : 1);
-        paragraph.FontFamily = _fontFamily;
-        paragraph.FontSize = metadata.Kind switch
-        {
-            MarkdownLineKind.Heading1 => 24,
-            MarkdownLineKind.Heading2 => 20,
-            MarkdownLineKind.Heading3 => 17,
-            _ => 14
-        };
-        paragraph.FontWeight = metadata.Kind is MarkdownLineKind.Heading1 or MarkdownLineKind.Heading2 or MarkdownLineKind.Heading3
-            ? FontWeights.SemiBold
-            : FontWeights.Normal;
-        paragraph.Foreground = metadata.Kind == MarkdownLineKind.Task && metadata.IsChecked ? _muted : _foreground;
-        paragraph.TextDecorations = metadata.Kind == MarkdownLineKind.Task && metadata.IsChecked ? TextDecorations.Strikethrough : null;
-    }
-
-    private BlockUIContainer CreateImageBlock(string relativePath, string altText)
-    {
-        var host = new Grid { Margin = new Thickness(0, 6, 0, 6) };
-        host.Children.Add(new Image
+        var host = new Grid { Margin = new Thickness(0, 6, 0, 6), MinHeight = 30 };
+        var image = new Image
         {
             Source = _imageLoader(relativePath),
             MaxHeight = 260,
             Stretch = Stretch.Uniform,
             StretchDirection = StretchDirection.DownOnly,
-            HorizontalAlignment = HorizontalAlignment.Stretch
-        });
-
-        var imageBlock = new BlockUIContainer(host) { Margin = new Thickness(0) };
-        _imageMetadata[imageBlock] = new ImageMetadata(altText, relativePath);
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            ToolTip = altText
+        };
+        host.Children.Add(image);
         var remove = new Button
         {
             Content = "×",
@@ -424,343 +554,77 @@ public sealed class MarkdownBlockEditor : Border
             Foreground = _muted,
             BorderBrush = _line,
             BorderThickness = new Thickness(1),
-            Cursor = Cursors.Hand
+            Padding = new Thickness(0),
+            ToolTip = "删除"
         };
-        remove.Click += (_, _) =>
+        remove.Click += (_, args) =>
         {
-            if (!_editor.Document.Blocks.Contains(imageBlock)) return;
-            _editor.Document.Blocks.Remove(imageBlock);
-            _imageMetadata.Remove(imageBlock);
-            if (_editor.Document.Blocks.Count == 0)
-                _editor.Document.Blocks.Add(CreateParagraph(new MarkdownLine(MarkdownLineKind.Paragraph, string.Empty)));
-            RaiseChanged();
+            args.Handled = true;
+            RemoveImage(anchor, sourceLength);
         };
         host.Children.Add(remove);
-        return imageBlock;
+        return host;
     }
 
-    private IReadOnlyList<Paragraph> GetSelectedParagraphs()
+    private sealed class MarkdownColorizer : DocumentColorizingTransformer
     {
-        var start = _editor.Selection.Start;
-        var end = _editor.Selection.End;
-        if (start.CompareTo(end) > 0) (start, end) = (end, start);
+        private readonly Brush _foreground;
+        private readonly Brush _muted;
+        private readonly Brush _accent;
+        private readonly FontFamily _fontFamily;
 
-        if (start.CompareTo(end) == 0)
+        public MarkdownColorizer(Brush foreground, Brush muted, Brush accent, FontFamily fontFamily)
         {
-            var current = GetParagraphAt(start);
-            return current is null ? [] : [current];
+            _foreground = foreground;
+            _muted = muted;
+            _accent = accent;
+            _fontFamily = fontFamily;
         }
 
-        return _editor.Document.Blocks
-            .OfType<Paragraph>()
-            .Where(paragraph => paragraph.ContentStart.CompareTo(end) < 0 && paragraph.ContentEnd.CompareTo(start) > 0)
-            .ToList();
-    }
-
-    private Paragraph? GetCurrentParagraph() => GetParagraphAt(_editor.Selection.Start);
-
-    private Paragraph? GetParagraphAt(TextPointer pointer)
-    {
-        var direct = pointer.Paragraph;
-        if (direct is not null && _editor.Document.Blocks.Contains(direct)) return direct;
-        return _editor.Document.Blocks
-            .OfType<Paragraph>()
-            .FirstOrDefault(paragraph => paragraph.ContentStart.CompareTo(pointer) <= 0 && paragraph.ContentEnd.CompareTo(pointer) >= 0);
-    }
-
-    private Block? GetCurrentBlock()
-    {
-        var paragraph = GetCurrentParagraph();
-        if (paragraph is not null) return paragraph;
-        return _editor.Document.Blocks.LastOrDefault();
-    }
-
-    private SourceDocument BuildSourceDocument()
-    {
-        PruneMetadata();
-        var lines = new List<SourceLine>();
-        var start = 0;
-        foreach (var block in _editor.Document.Blocks)
+        protected override void ColorizeLine(DocumentLine line)
         {
-            MarkdownLine? line = block switch
+            var source = CurrentContext.Document.GetText(line.Offset, line.Length);
+            var task = TaskLine.Match(source);
+            if (task.Success)
             {
-                BlockUIContainer imageBlock when _imageMetadata.TryGetValue(imageBlock, out var image)
-                    => new MarkdownLine(MarkdownLineKind.Image, image.AltText, ImagePath: image.RelativePath),
-                Paragraph paragraph => CreateMarkdownLine(paragraph),
-                _ => null
-            };
-            if (line is null) continue;
-
-            var sourceText = MarkdownDocumentService.SerializeLine(line);
-            lines.Add(new SourceLine(block, line, sourceText, start));
-            start += sourceText.Length + Environment.NewLine.Length;
-        }
-
-        var documentText = string.Join(Environment.NewLine, lines.Select(item => item.SourceText));
-        return new SourceDocument(lines, documentText);
-    }
-
-    private MarkdownLine CreateMarkdownLine(Paragraph paragraph)
-    {
-        var metadata = GetParagraphMetadata(paragraph);
-        return new MarkdownLine(
-            metadata.Kind,
-            ExtractParagraphText(paragraph, metadata.Kind),
-            metadata.IsChecked,
-            metadata.Indent);
-    }
-
-    private int GetSourceOffset(SourceDocument snapshot, TextPointer pointer)
-    {
-        var sourceLine = FindSourceLine(snapshot, pointer);
-        if (sourceLine is null) return pointer.CompareTo(_editor.Document.ContentStart) <= 0 ? 0 : snapshot.Text.Length;
-
-        if (sourceLine.Block is not Paragraph paragraph)
-            return sourceLine.Start;
-        if (pointer.CompareTo(paragraph.ContentStart) <= 0)
-            return sourceLine.Start;
-
-        var prefixLength = MarkdownPrefixLength(sourceLine.Line);
-        var textOffset = GetParagraphTextOffset(paragraph, pointer, sourceLine.Line.Kind);
-        return Math.Clamp(sourceLine.Start + prefixLength + textOffset, sourceLine.Start, sourceLine.Start + sourceLine.SourceText.Length);
-    }
-
-    private static int MarkdownPrefixLength(MarkdownLine line) => line.Kind switch
-    {
-        MarkdownLineKind.Heading1 => 2,
-        MarkdownLineKind.Heading2 => 3,
-        MarkdownLineKind.Heading3 => 4,
-        MarkdownLineKind.Bullet => line.Indent * 2 + 2,
-        MarkdownLineKind.Task => line.Indent * 2 + 6,
-        _ => 0
-    };
-
-    private SourceLine? FindSourceLine(SourceDocument snapshot, TextPointer pointer)
-    {
-        var paragraph = pointer.Paragraph;
-        if (paragraph is not null)
-            return snapshot.Lines.FirstOrDefault(line => ReferenceEquals(line.Block, paragraph));
-
-        foreach (var line in snapshot.Lines)
-        {
-            if (pointer.CompareTo(line.Block.ContentStart) >= 0 && pointer.CompareTo(line.Block.ContentEnd) <= 0)
-                return line;
-        }
-        return pointer.CompareTo(_editor.Document.ContentStart) <= 0 ? snapshot.Lines.FirstOrDefault() : snapshot.Lines.LastOrDefault();
-    }
-
-    private static int GetParagraphTextOffset(Paragraph paragraph, TextPointer pointer, MarkdownLineKind kind)
-    {
-        var offset = 0;
-        foreach (var run in EnumerateRuns(paragraph.Inlines))
-        {
-            if (IsStructuralRun(paragraph, run, kind))
-            {
-                if (pointer.CompareTo(run.ContentEnd) < 0) return offset;
-                continue;
-            }
-
-            if (pointer.CompareTo(run.ContentStart) <= 0) return offset;
-            if (pointer.CompareTo(run.ContentEnd) < 0)
-                return offset + GetRunTextOffset(run, pointer);
-            offset += run.Text.Length;
-        }
-        return offset;
-    }
-
-    private static int GetRunTextOffset(Run run, TextPointer pointer)
-    {
-        if (pointer.CompareTo(run.ContentStart) <= 0) return 0;
-        if (pointer.CompareTo(run.ContentEnd) >= 0) return run.Text.Length;
-        var text = new TextRange(run.ContentStart, pointer).Text;
-        return Math.Clamp(text.Length, 0, run.Text.Length);
-    }
-
-    private static IEnumerable<Run> EnumerateRuns(IEnumerable<Inline> inlines)
-    {
-        foreach (var inline in inlines)
-        {
-            switch (inline)
-            {
-                case Run run:
-                    yield return run;
-                    break;
-                case Span span:
-                    foreach (var runInSpan in EnumerateRuns(span.Inlines)) yield return runInSpan;
-                    break;
-            }
-        }
-    }
-
-    private static bool IsStructuralRun(Paragraph paragraph, Run run, MarkdownLineKind kind)
-    {
-        if (kind == MarkdownLineKind.Bullet)
-            return ReferenceEquals(paragraph.Inlines.FirstInline, run) && run.Text.StartsWith("• ", StringComparison.Ordinal);
-        if (kind != MarkdownLineKind.Task) return false;
-
-        return paragraph.Inlines.FirstInline is InlineUIContainer first && ReferenceEquals(first.NextInline, run);
-    }
-
-    private void RestoreCaretAtSourceOffset(int offset)
-    {
-        var snapshot = BuildSourceDocument();
-        var pointer = GetPointerAtSourceOffset(snapshot, offset);
-        if (pointer is null)
-        {
-            FocusEditor();
-            return;
-        }
-        _editor.Focus();
-        _editor.CaretPosition = pointer;
-    }
-
-    private TextPointer? GetPointerAtSourceOffset(SourceDocument snapshot, int offset)
-    {
-        if (snapshot.Lines.Count == 0) return null;
-        offset = Math.Clamp(offset, 0, snapshot.Text.Length);
-
-        for (var index = 0; index < snapshot.Lines.Count; index++)
-        {
-            var line = snapshot.Lines[index];
-            var lineEnd = line.Start + line.SourceText.Length;
-            if (offset < line.Start)
-                return GetParagraphEnd(snapshot.Lines[index - 1]);
-            if (offset > lineEnd) continue;
-
-            if (line.Block is Paragraph paragraph)
-            {
-                var relative = offset - line.Start;
-                var prefixLength = MarkdownPrefixLength(line.Line);
-                if (relative <= prefixLength) return GetFirstTextPointer(paragraph, line.Line.Kind);
-                return GetParagraphTextPointer(paragraph, line.Line.Kind, relative - prefixLength);
-            }
-            return line.Block.ContentStart;
-        }
-        return GetParagraphEnd(snapshot.Lines[^1]);
-    }
-
-    private static TextPointer GetFirstTextPointer(Paragraph paragraph, MarkdownLineKind kind)
-    {
-        foreach (var run in EnumerateRuns(paragraph.Inlines))
-            if (!IsStructuralRun(paragraph, run, kind)) return run.ContentStart;
-        return paragraph.ContentEnd;
-    }
-
-    private static TextPointer GetParagraphTextPointer(Paragraph paragraph, MarkdownLineKind kind, int offset)
-    {
-        offset = Math.Max(0, offset);
-        foreach (var run in EnumerateRuns(paragraph.Inlines))
-        {
-            if (IsStructuralRun(paragraph, run, kind)) continue;
-            if (offset <= run.Text.Length)
-                return run.ContentStart.GetPositionAtOffset(offset, LogicalDirection.Forward);
-            offset -= run.Text.Length;
-        }
-        return paragraph.ContentEnd;
-    }
-
-    private static TextPointer GetParagraphEnd(SourceLine line) => line.Block is Paragraph paragraph ? paragraph.ContentEnd : line.Block.ContentEnd;
-
-    private void RestoreSelection(TextPointer start, TextPointer end)
-    {
-        try
-        {
-            _editor.Selection.Select(start, end);
-            _editor.Focus();
-        }
-        catch (ArgumentException)
-        {
-            FocusEditor();
-        }
-    }
-
-    private ParagraphMetadata GetParagraphMetadata(Paragraph paragraph)
-    {
-        if (_paragraphMetadata.TryGetValue(paragraph, out var metadata)) return metadata;
-
-        var firstInline = paragraph.Inlines.FirstInline;
-        var kind = firstInline is InlineUIContainer { Child: CheckBox }
-            ? MarkdownLineKind.Task
-            : firstInline is Run { Text: string text } && text.StartsWith("• ", StringComparison.Ordinal)
-                ? MarkdownLineKind.Bullet
-                : paragraph.FontSize switch
+                var markerLength = task.Groups[0].Length - task.Groups[3].Length;
+                ChangeLinePart(line.Offset + markerLength, line.EndOffset, element =>
                 {
-                    >= 22 => MarkdownLineKind.Heading1,
-                    >= 18 => MarkdownLineKind.Heading2,
-                    >= 16 => MarkdownLineKind.Heading3,
-                    _ => MarkdownLineKind.Paragraph
+                    if (element.TextRunProperties is not VisualLineElementTextRunProperties properties) return;
+                    properties.SetForegroundBrush(task.Groups[2].Value.Equals("x", StringComparison.OrdinalIgnoreCase) ? _muted : _foreground);
+                    if (task.Groups[2].Value.Equals("x", StringComparison.OrdinalIgnoreCase)) properties.SetTextDecorations(TextDecorations.Strikethrough);
+                });
+                return;
+            }
+
+            var heading = HeadingLine.Match(source);
+            if (heading.Success)
+            {
+                var size = heading.Groups[2].Length switch
+                {
+                    1 => 24d,
+                    2 => 20d,
+                    _ => 17d
                 };
-        var isChecked = firstInline is InlineUIContainer { Child: CheckBox checkbox } && checkbox.IsChecked == true;
-        metadata = new ParagraphMetadata(kind, isChecked, Math.Max(0, (int)Math.Round(paragraph.Margin.Left / 18)));
-        _paragraphMetadata[paragraph] = metadata;
-        return metadata;
-    }
+                ChangeLinePart(line.Offset + heading.Groups[1].Length + heading.Groups[2].Length + 1, line.EndOffset, element =>
+                {
+                    if (element.TextRunProperties is not VisualLineElementTextRunProperties properties) return;
+                    properties.SetForegroundBrush(_foreground);
+                    properties.SetFontRenderingEmSize(size);
+                    properties.SetTypeface(new Typeface(_fontFamily, FontStyles.Normal, FontWeights.SemiBold, FontStretches.Normal));
+                });
+                return;
+            }
 
-    private static string ExtractParagraphText(Paragraph paragraph, MarkdownLineKind kind)
-    {
-        var text = new System.Text.StringBuilder();
-        foreach (var inline in paragraph.Inlines)
-            AppendInlineText(inline, text);
-
-        var value = text.ToString();
-        if (kind == MarkdownLineKind.Bullet && value.StartsWith("• ", StringComparison.Ordinal))
-            value = value[2..];
-        else if (kind == MarkdownLineKind.Task && value.StartsWith(' '))
-            value = value[1..];
-        return value;
-    }
-
-    private static void AppendInlineText(Inline inline, System.Text.StringBuilder target)
-    {
-        switch (inline)
-        {
-            case Run run:
-                target.Append(run.Text);
-                break;
-            case LineBreak:
-                target.Append('\n');
-                break;
-            case InlineUIContainer:
-                break;
-            case Span span:
-                foreach (var child in span.Inlines) AppendInlineText(child, target);
-                break;
+            var bullet = BulletLine.Match(source);
+            if (bullet.Success)
+            {
+                ChangeLinePart(line.Offset + bullet.Groups[1].Length + 2, line.EndOffset, element =>
+                {
+                    if (element.TextRunProperties is VisualLineElementTextRunProperties properties)
+                        properties.SetForegroundBrush(_foreground);
+                });
+            }
         }
     }
-
-    private void PruneMetadata()
-    {
-        var paragraphs = _editor.Document.Blocks.OfType<Paragraph>().ToHashSet();
-        foreach (var paragraph in _paragraphMetadata.Keys.Where(item => !paragraphs.Contains(item)).ToList())
-            _paragraphMetadata.Remove(paragraph);
-
-        var images = _editor.Document.Blocks.OfType<BlockUIContainer>().ToHashSet();
-        foreach (var image in _imageMetadata.Keys.Where(item => !images.Contains(item)).ToList())
-            _imageMetadata.Remove(image);
-    }
-
-    private void RaiseChanged()
-    {
-        if (!_loading) ContentChanged?.Invoke(this, EventArgs.Empty);
-    }
-
-    private sealed class ParagraphMetadata
-    {
-        public ParagraphMetadata(MarkdownLineKind kind, bool isChecked, int indent)
-        {
-            Kind = kind;
-            IsChecked = isChecked;
-            Indent = indent;
-        }
-
-        public MarkdownLineKind Kind { get; set; }
-        public bool IsChecked { get; set; }
-        public int Indent { get; set; }
-    }
-
-    private sealed record ImageMetadata(string AltText, string RelativePath);
-
-    private sealed record SourceLine(Block Block, MarkdownLine Line, string SourceText, int Start);
-
-    private sealed record SourceDocument(IReadOnlyList<SourceLine> Lines, string Text);
 }

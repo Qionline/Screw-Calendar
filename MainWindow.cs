@@ -680,6 +680,15 @@ public sealed partial class MainWindow : Window
     private Brush Muted() => new SolidColorBrush(_state.Theme == CalendarTheme.Dark ? Color.FromRgb(154, 169, 186) : Color.FromRgb(120, 134, 149));
     private Brush WeekdayForeground(int column) => column >= 5 ? Accent() : Muted();
     private Brush Accent() => new SolidColorBrush(AccentColor());
+    private Brush MarkdownSelectionBrush()
+    {
+        if (_state.Theme == CalendarTheme.Dark)
+            return Accent();
+
+        // A light, opaque tint keeps the current theme color visible without
+        // overpowering selected Markdown text in light mode.
+        return new SolidColorBrush(Blend(Color.FromRgb(255, 255, 255), AccentColor(), .14));
+    }
     private Color AccentColor() => AccentColor(_state.ThemeColor);
     private Color AccentColor(CalendarThemeColor color)
     {
