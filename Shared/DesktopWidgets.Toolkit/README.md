@@ -7,7 +7,7 @@
 - `SingleInstanceGuard`：基于命名互斥体限制单实例运行。
 - `TrayIconService`：创建和管理系统托盘图标与菜单。
 - `StartupRegistration`：管理当前用户的 Windows 开机启动项。
-- `WindowLayerController`：管理始终置顶和普通窗口下方的桌面层级。
+- `WindowLayerController`：管理始终置顶和普通窗口下方的桌面层级，并支持编辑输入时临时激活桌面层窗口。
 - `WindowPlacementService`：保存显示器、位置和大小，并在显示器断开时恢复到可见区域。
 - `DialogWindowBehavior`：统一子窗口所有者、位置和激活行为。
 - `ApplicationIconLoader`：加载应用图标。

@@ -16,14 +16,14 @@ public sealed partial class MainWindow
 {
     private Window NewDialog(string title, double width, double height, Point? ownerPosition = null)
     {
-        var dialog = new Window { Title = title, Owner = this, Width = width, Height = height, WindowStartupLocation = WindowStartupLocation.CenterOwner, WindowStyle = WindowStyle.ToolWindow, ResizeMode = ResizeMode.NoResize, ShowInTaskbar = false, Background = CardBackground(), Foreground = Foreground(), FontFamily = _uiFont, Topmost = Topmost };
+        var dialog = new Window { Title = title, Owner = this, Width = width, Height = height, WindowStartupLocation = WindowStartupLocation.CenterOwner, WindowStyle = WindowStyle.ToolWindow, ResizeMode = ResizeMode.NoResize, ShowInTaskbar = false, Background = CardBackground(), Foreground = Foreground(), FontFamily = _uiFont, Topmost = _state.Topmost };
         PlaceDialogAt(dialog, ownerPosition);
         PrepareDialogLayer(dialog);
         return dialog;
     }
 
     private Window NewEventDialog(string title, Point? ownerPosition = null) =>
-        NewBorderlessDialog(title, 540, 620, 72, ownerPosition);
+        NewBorderlessDialog(title, 324, 403, 30, ownerPosition);
 
     private Window NewSettingsDialog(string title, Point? ownerPosition = null) =>
         NewBorderlessDialog(title, 420, 680, 68, ownerPosition);
@@ -44,7 +44,7 @@ public sealed partial class MainWindow
             Background = Brushes.Transparent,
             Foreground = Foreground(),
             FontFamily = _uiFont,
-            Topmost = Topmost
+            Topmost = _state.Topmost
         };
         PlaceDialogAt(dialog, ownerPosition);
         DialogWindowBehavior.EnableTopDrag(dialog, dragHeight);
@@ -54,7 +54,7 @@ public sealed partial class MainWindow
 
     private void PrepareDialogLayer(Window dialog)
     {
-        DialogWindowBehavior.ActivateOnShow(dialog, Topmost);
+        DialogWindowBehavior.ActivateOnShow(dialog, _state.Topmost);
         dialog.Closed += (_, _) => _windowLayerController.Refresh();
     }
 

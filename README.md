@@ -10,9 +10,9 @@ Screw Calendar 是一个面向 Windows 10/11 的桌面日历与本机 Markdown �
 ## 功能
 
 - 星期一至星期日的七列日历，支持 5～10 个日期行、按月翻页和“回到今天”。
-- Windows 11、极简、桌面挂件三种样式，支持浅色/深色、四种主题色和透明度。
-- 今天高亮、周末区分、二十四节气，以及 2025～2026 年中国法定节假日和调休标记。
-- 常驻待办和按日期保存的 Markdown 待办，提供普通编辑模式、源码模式和本机图片归档。
+- 经典、极简、紧凑三种样式，支持浅色/深色、四种主题色和透明度。
+- 今天高亮、周末区分、二十四节气，以及可静默联网更新的中国法定节假日和调休标记。
+- 常驻待办和按日期保存的 Markdown 待办，提供普通可视块编辑器和本机图片归档。
 - 托盘、开机启动、位置和大小锁定、窗口层级、多显示器位置恢复与单实例运行。
 - 简体中文和英文界面。
 - JSON 导入导出、主文件自动备份和损坏恢复。
@@ -27,13 +27,14 @@ Screw Calendar 是一个面向 Windows 10/11 的桌面日历与本机 Markdown �
 
 ## 本机数据
 
-程序不会同步或上传日历内容。数据保存在：
+程序不会同步或上传日历内容。程序会从 `holiday-cn` 下载公开的节假日 JSON，并在启动或翻页时检查当前查看年份及下一年的数据；成功缓存后 24 小时内不重复下载，网络不可用时自动使用缓存或内置数据。数据保存在：
 
 ```text
 %LocalAppData%\ScrewCalendar\
 ├─ data\calendar.json
 ├─ data\calendar.json.bak
 ├─ data\assets\
+├─ data\holiday-cache\
 └─ logs\app.log
 ```
 
@@ -41,10 +42,10 @@ JSON 导出不包含 `assets` 中的图片。跨电脑迁移包含图片的待�
 
 ## 从源码构建
 
-安装 [global.json](global.json) 指定的 .NET 8 SDK，然后运行：
+安装不低于 [global.json](global.json) 基线版本的 .NET 8 SDK，然后运行：
 
 ```powershell
-dotnet restore .\ScrewCalendar.sln --configfile .\NuGet.Config --locked-mode
+dotnet restore .\ScrewCalendar.sln --configfile .\NuGet.Config
 dotnet run --project .\tests\ScrewCalendar.Tests\ScrewCalendar.Tests.csproj -c Release --no-restore
 dotnet format .\ScrewCalendar.sln --verify-no-changes --no-restore
 dotnet build .\ScrewCalendar.csproj -c Release --no-restore

@@ -64,7 +64,9 @@ public static partial class MarkdownDocumentService
         return result;
     }
 
-    public static string SerializeLines(IEnumerable<MarkdownLine> lines) => string.Join(Environment.NewLine, lines.Select(line =>
+    public static string SerializeLines(IEnumerable<MarkdownLine> lines) => string.Join(Environment.NewLine, lines.Select(SerializeLine)).Trim();
+
+    public static string SerializeLine(MarkdownLine line)
     {
         var indent = new string(' ', line.Indent * 2);
         return line.Kind switch
@@ -77,7 +79,7 @@ public static partial class MarkdownDocumentService
             MarkdownLineKind.Image => $"![{line.Text}]({line.ImagePath})",
             _ => line.Text
         };
-    })).Trim();
+    }
 
     public static string ToggleTask(string markdown, int taskIndex, bool isChecked)
     {
