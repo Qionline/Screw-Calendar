@@ -34,6 +34,7 @@ public sealed class WindowLayerController : IDisposable
     private HwndSource? _source;
     private IntPtr _foregroundHook;
     private bool _alwaysOnTop;
+    private bool _interactive;
     private bool _fullscreenForeground;
     private bool _placementPending;
     private bool _disposed;
@@ -49,6 +50,20 @@ public sealed class WindowLayerController : IDisposable
     }
 
     public bool AlwaysOnTop => _alwaysOnTop;
+
+    /// <summary>
+    /// Temporarily lets a desktop-layer widget activate for text input or other
+    /// direct interaction. The widget remains below ordinary windows when the
+    /// interaction ends.
+    /// </summary>
+    public void SetInteractive(bool enabled)
+    {
+        if (_disposed) return;
+        _interactive = enabled;
+        ApplyMode();
+        if (enabled && !_alwaysOnTop && _window.IsVisible)
+            _window.Activate();
+    }
 
     public void SetAlwaysOnTop(bool enabled)
     {
@@ -92,8 +107,8 @@ public sealed class WindowLayerController : IDisposable
         var handle = new WindowInteropHelper(_window).Handle;
         if (handle == IntPtr.Zero) return;
 
-        ApplyNoActivateStyle(handle, !_alwaysOnTop);
-        _window.ShowActivated = _alwaysOnTop;
+        ApplyNoActivateStyle(handle, !_alwaysOnTop && !_interactive);
+        _window.ShowActivated = _alwaysOnTop || _interactive;
         if (_alwaysOnTop)
         {
             UpdateFullscreenState();

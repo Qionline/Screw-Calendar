@@ -14,7 +14,7 @@
 
 1. 更新 `ScrewCalendar.csproj` 中的 `Version`；程序集版本和文件版本由 SDK 自动派生。
 2. 把 `CHANGELOG.md` 中待发布的内容移动到带日期的版本标题下。
-3. 确认已安装 `global.json` 指定的 .NET SDK。
+3. 确认已安装不低于 `global.json` 基线版本的 .NET SDK。
 4. 执行以下命令：
 
 ```powershell

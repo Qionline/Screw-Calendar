@@ -7,10 +7,6 @@ using System.Windows.Media;
 using Brushes = System.Windows.Media.Brushes;
 using HorizontalAlignment = System.Windows.HorizontalAlignment;
 using Orientation = System.Windows.Controls.Orientation;
-using ScrollBar = System.Windows.Controls.Primitives.ScrollBar;
-using ScrollBarVisibility = System.Windows.Controls.ScrollBarVisibility;
-using TextBox = System.Windows.Controls.TextBox;
-using TextWrapping = System.Windows.TextWrapping;
 using VerticalAlignment = System.Windows.VerticalAlignment;
 
 namespace ScrewCalendar;
@@ -27,9 +23,8 @@ public sealed partial class MainWindow
             return;
         }
 
-        var context = permanent ? Localization.T("todo.permanent") : CalendarMath.Key(date);
         var existing = GetMarkdownDocument(date, permanent);
-        var dialog = NewEventDialog(Localization.T("markdown.editTitle"), ownerPosition);
+        var dialog = NewEventDialog(string.Empty, ownerPosition);
         _markdownEditorDialogs[editorKey] = dialog;
         var previewsToday = !permanent && date.Date == _today.Date;
         dialog.Closed += (_, _) =>
@@ -42,46 +37,14 @@ public sealed partial class MainWindow
             RenderTodoPanel();
         };
         var root = new Grid();
-        root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(66) });
-        root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(42) });
+        root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(40) });
         root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-        root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(54) });
-
-        var header = new Grid();
-        header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        var headerStack = new StackPanel();
-        headerStack.Children.Add(Text(context, 13, Muted()));
-        headerStack.Children.Add(Text(Localization.T("markdown.editTitle"), 23, FontWeights.SemiBold, Foreground(), new Thickness(0, 4, 0, 0)));
-        header.Children.Add(headerStack);
-        var close = DialogCloseButton(dialog, 32, 23, 0);
-        Grid.SetColumn(close, 1); header.Children.Add(close);
-        root.Children.Add(header);
+        root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(46) });
 
         var normalEditor = new MarkdownBlockEditor(Foreground(), Muted(), InputBackground(), Line(), Accent(), _uiFont, LoadMarkdownImage);
         normalEditor.SetMarkdown(existing);
-        var rawEditor = new TextBox
-        {
-            Text = existing,
-            AcceptsReturn = true,
-            AcceptsTab = true,
-            TextWrapping = TextWrapping.Wrap,
-            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-            FontFamily = new FontFamily("Cascadia Mono, Consolas"),
-            FontSize = 13,
-            Padding = new Thickness(10, 8, 10, 8),
-            Visibility = Visibility.Collapsed
-        };
-        ApplyInputStyle(rawEditor);
-        rawEditor.Resources.Add(typeof(ScrollBar), MinimalScrollBarStyle());
+        Grid.SetRow(normalEditor, 1); root.Children.Add(normalEditor);
 
-        var editorHost = new Grid();
-        editorHost.Children.Add(normalEditor);
-        editorHost.Children.Add(rawEditor);
-        Grid.SetRow(editorHost, 2); root.Children.Add(editorHost);
-
-        var markdownMode = false;
         if (previewsToday)
         {
             _todayMarkdownPreview = existing;
@@ -90,94 +53,55 @@ public sealed partial class MainWindow
 
         normalEditor.ContentChanged += (_, _) =>
         {
-            if (!markdownMode) PublishTodayPreview();
+            PublishTodayPreview();
         };
-        rawEditor.TextChanged += (_, _) =>
-        {
-            if (markdownMode) PublishTodayPreview();
-        };
-        var toolbar = new Grid { Margin = new Thickness(0, 0, 0, 7) };
-        toolbar.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        var toolbar = new Grid { Margin = new Thickness(0, 0, 0, 5) };
         toolbar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        var modes = new StackPanel { Orientation = Orientation.Horizontal };
-        var normalModeButton = ToolbarButton(Localization.T("markdown.modeNormal"), Localization.T("markdown.modeNormal"), 58);
-        var markdownModeButton = ToolbarButton(Localization.T("markdown.modeMarkdown"), Localization.T("markdown.modeMarkdown"), 76);
-        normalModeButton.Background = Accent(); normalModeButton.Foreground = Brushes.White;
-        modes.Children.Add(normalModeButton); modes.Children.Add(markdownModeButton);
-        toolbar.Children.Add(modes);
+        toolbar.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
-        var formats = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+        var formats = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Left };
         AddFormatButton(formats, "T", Localization.T("markdown.paragraph"), MarkdownLineKind.Paragraph);
         AddFormatButton(formats, "H1", Localization.T("markdown.heading1"), MarkdownLineKind.Heading1);
         AddFormatButton(formats, "H2", Localization.T("markdown.heading2"), MarkdownLineKind.Heading2);
         AddFormatButton(formats, "H3", Localization.T("markdown.heading3"), MarkdownLineKind.Heading3);
         AddFormatButton(formats, "•", Localization.T("markdown.list"), MarkdownLineKind.Bullet);
         AddFormatButton(formats, "☑", Localization.T("markdown.task"), MarkdownLineKind.Task);
-        Grid.SetColumn(formats, 1); toolbar.Children.Add(formats);
-        Grid.SetRow(toolbar, 1); root.Children.Add(toolbar);
+        Grid.SetColumn(formats, 0); toolbar.Children.Add(formats);
+        var close = DialogCloseButton(dialog, 28, 20, 0, InputBackground());
+        Grid.SetColumn(close, 1); toolbar.Children.Add(close);
+        Grid.SetRow(toolbar, 0); root.Children.Add(toolbar);
 
-        normalModeButton.Click += (_, _) => SwitchMode(false);
-        markdownModeButton.Click += (_, _) => SwitchMode(true);
-        DataObject.AddPastingHandler(rawEditor, PasteImage);
         DataObject.AddPastingHandler(normalEditor, PasteImage);
-        editorHost.PreviewKeyDown += PasteImageShortcut;
-        editorHost.AllowDrop = true;
-        editorHost.PreviewDragOver += PreviewImageDragOver;
-        editorHost.PreviewDrop += DropImages;
+        normalEditor.PreviewKeyDown += PasteImageShortcut;
+        normalEditor.AllowDrop = true;
+        normalEditor.PreviewDragOver += PreviewImageDragOver;
+        normalEditor.PreviewDrop += DropImages;
 
         void AddFormatButton(Panel panel, string label, string toolTip, MarkdownLineKind kind)
         {
-            var button = ToolbarButton(label, toolTip, label.Length > 1 ? 38 : 34);
-            button.Click += (_, _) =>
-            {
-                if (markdownMode) ApplyRawBlock(rawEditor, kind);
-                else normalEditor.ApplyKind(kind);
-            };
+            var button = ToolbarButton(label, toolTip, label.Length > 1 ? 31 : 28);
+            button.Margin = new Thickness(0, 0, 2, 0);
+            button.Click += (_, _) => normalEditor.ApplyKind(kind);
             panel.Children.Add(button);
         }
 
         void PublishTodayPreview()
         {
             if (!previewsToday) return;
-            _todayMarkdownPreview = markdownMode ? rawEditor.Text : normalEditor.GetMarkdown();
+            _todayMarkdownPreview = normalEditor.GetMarkdown();
             RenderTodoPanel();
         }
 
         void ApplyExternalTodayDraft(string markdown)
         {
-            if (markdownMode)
-            {
-                var caret = Math.Min(rawEditor.CaretIndex, markdown.Length);
-                rawEditor.Text = markdown;
-                rawEditor.CaretIndex = caret;
-            }
-            else
-            {
-                normalEditor.SetMarkdown(markdown);
-            }
-        }
-
-        void SwitchMode(bool useMarkdown)
-        {
-            if (markdownMode == useMarkdown) return;
-            if (useMarkdown) rawEditor.Text = normalEditor.GetMarkdown();
-            else normalEditor.SetMarkdown(rawEditor.Text);
-            markdownMode = useMarkdown;
-            rawEditor.Visibility = useMarkdown ? Visibility.Visible : Visibility.Collapsed;
-            normalEditor.Visibility = useMarkdown ? Visibility.Collapsed : Visibility.Visible;
-            normalModeButton.Background = useMarkdown ? InputBackground() : Accent();
-            normalModeButton.Foreground = useMarkdown ? Foreground() : Brushes.White;
-            markdownModeButton.Background = useMarkdown ? Accent() : InputBackground();
-            markdownModeButton.Foreground = useMarkdown ? Brushes.White : Foreground();
-            if (useMarkdown) rawEditor.Focus();
+            normalEditor.SetMarkdown(markdown);
         }
 
         void InsertStoredImage(string path, string altText)
         {
             var safeAltText = altText.Replace("[", string.Empty, StringComparison.Ordinal)
                 .Replace("]", string.Empty, StringComparison.Ordinal);
-            if (markdownMode) InsertRawText(rawEditor, $"![{safeAltText}]({path})");
-            else normalEditor.AddImage(path, safeAltText);
+            normalEditor.AddImage(path, safeAltText);
         }
 
         void PasteImage(object sender, DataObjectPastingEventArgs args)
@@ -246,13 +170,13 @@ public sealed partial class MainWindow
         save.Height = 38; save.Margin = new Thickness(8, 2, 0, 0); save.Background = Accent(); save.Foreground = Brushes.White; save.BorderBrush = Accent();
         save.Click += (_, _) =>
         {
-            var markdown = (markdownMode ? rawEditor.Text : normalEditor.GetMarkdown()).Trim();
+            var markdown = normalEditor.GetMarkdown().Trim();
             SetMarkdownDocument(date, permanent, markdown);
             SaveState(); dialog.Close(); Render();
         };
         buttons.Children.Add(cancel); buttons.Children.Add(save);
         Grid.SetColumn(buttons, 1); actions.Children.Add(buttons);
-        Grid.SetRow(actions, 3); root.Children.Add(actions);
+        Grid.SetRow(actions, 2); root.Children.Add(actions);
 
         dialog.Content = DialogSurface(root, DialogPadding());
         dialog.Show();
@@ -285,38 +209,6 @@ public sealed partial class MainWindow
         button.FontSize = label.StartsWith('H') ? 11 : 13;
         button.Background = InputBackground();
         return button;
-    }
-
-    private static void ApplyRawBlock(TextBox editor, MarkdownLineKind kind)
-    {
-        var lineIndex = editor.GetLineIndexFromCharacterIndex(editor.CaretIndex);
-        var lineStart = editor.GetCharacterIndexFromLineIndex(Math.Max(0, lineIndex));
-        var lineLength = editor.GetLineLength(Math.Max(0, lineIndex));
-        var line = lineLength > 0 ? editor.Text.Substring(lineStart, lineLength).TrimEnd('\r', '\n') : string.Empty;
-        var stripped = System.Text.RegularExpressions.Regex.Replace(line, @"^\s*(#{1,3}\s+|[-*+]\s+(\[[ xX]\]\s*)?)", string.Empty);
-        var prefix = kind switch
-        {
-            MarkdownLineKind.Heading1 => "# ",
-            MarkdownLineKind.Heading2 => "## ",
-            MarkdownLineKind.Heading3 => "### ",
-            MarkdownLineKind.Bullet => "- ",
-            MarkdownLineKind.Task => "- [ ] ",
-            _ => string.Empty
-        };
-        editor.Select(lineStart, line.Length);
-        editor.SelectedText = prefix + stripped;
-        editor.CaretIndex = lineStart + prefix.Length + stripped.Length;
-        editor.Focus();
-    }
-
-    private static void InsertRawText(TextBox editor, string text)
-    {
-        var start = editor.CaretIndex;
-        var insertion = (editor.CaretIndex > 0 && editor.Text[editor.CaretIndex - 1] != '\n' ? Environment.NewLine : string.Empty) + text + Environment.NewLine;
-        editor.Select(start, 0);
-        editor.SelectedText = insertion;
-        editor.CaretIndex = start + insertion.Length;
-        editor.Focus();
     }
 
     private static string[] DroppedImageFiles(System.Windows.IDataObject data)

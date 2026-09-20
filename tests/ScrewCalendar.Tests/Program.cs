@@ -5,6 +5,10 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Threading;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Documents;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Xml.Linq;
@@ -138,6 +142,7 @@ static void TestNormalEditorFormattingToolbar()
                 Brushes.Blue,
                 new FontFamily("Segoe UI"),
                 _ => null);
+            True(editor.Child is RichTextBox, "Markdown editor uses one native RichTextBox selection host");
             editor.SetMarkdown("Toolbar test");
             editor.ApplyKind(MarkdownLineKind.Heading1);
             editor.ApplyKind(MarkdownLineKind.Heading2);
@@ -145,6 +150,35 @@ static void TestNormalEditorFormattingToolbar()
             editor.ApplyKind(MarkdownLineKind.Bullet);
             editor.ApplyKind(MarkdownLineKind.Task);
             True(editor.GetMarkdown().StartsWith("- [ ] Toolbar test", StringComparison.Ordinal), "Toolbar updates the active visual block without reparenting errors");
+
+            editor.SetMarkdown("First\nSecond\nThird");
+            var richTextBox = (RichTextBox)editor.Child!;
+            var paragraphs = richTextBox.Document.Blocks.OfType<Paragraph>().ToList();
+            richTextBox.Selection.Select(paragraphs[0].ContentStart, paragraphs[^1].ContentEnd);
+            editor.ApplyKind(MarkdownLineKind.Task);
+            Equal(string.Join(Environment.NewLine, new[] { "- [ ] First", "- [ ] Second", "- [ ] Third" }), editor.GetMarkdown(), "Native selection formats every selected paragraph");
+
+            editor.SetMarkdown("- [ ] First\n- [x] Second\n- Plain");
+            richTextBox = (RichTextBox)editor.Child!;
+            paragraphs = richTextBox.Document.Blocks.OfType<Paragraph>().ToList();
+            var originalClipboard = Clipboard.GetDataObject();
+            try
+            {
+                richTextBox.Selection.Select(paragraphs[0].ContentStart, paragraphs[^1].ContentEnd);
+                ApplicationCommands.Copy.Execute(null, richTextBox);
+                Equal(string.Join(Environment.NewLine, new[] { "- [ ] First", "- [x] Second", "- Plain" }), Clipboard.GetText(), "Copy exports selected Markdown syntax");
+
+                var pasted = new MarkdownBlockEditor(Brushes.Black, Brushes.Gray, Brushes.White, Brushes.LightGray, Brushes.Blue, new FontFamily("Segoe UI"), _ => null);
+                pasted.SetMarkdown(string.Empty);
+                pasted.FocusEditor();
+                ApplicationCommands.Paste.Execute(null, (RichTextBox)pasted.Child!);
+                Equal(string.Join(Environment.NewLine, new[] { "- [ ] First", "- [x] Second", "- Plain" }), pasted.GetMarkdown(), "Paste restores Markdown block kinds");
+            }
+            finally
+            {
+                if (originalClipboard is not null) Clipboard.SetDataObject(originalClipboard);
+            }
+
             editor.AddImage("assets/test.png", "test");
             True(editor.GetMarkdown().Contains("![test](assets/test.png)", StringComparison.Ordinal), "Visual editor inserts an archived image block");
             editor.FocusEditor();
@@ -210,6 +244,28 @@ static void TestCalendarMetadata()
     var holiday = metadata.GetHoliday(new DateTime(2026, 10, 1));
     True(holiday is not null && holiday.IsOffDay, "Holiday lookup");
     Equal("秋分", metadata.GetSolarTerm(new DateTime(2026, 9, 23)), "Solar-term lookup");
+
+    const string remoteJson = """
+        { "year": 2027, "papers": [], "days": [
+          { "name": "测试节日", "date": "2027-01-01", "isOffDay": true },
+          { "name": "测试调班", "date": "2027-01-02", "isOffDay": false }
+        ] }
+        """;
+    True(metadata.TryApplyHolidayDocument(remoteJson, 2027), "Remote holiday document validation");
+    True(metadata.GetHoliday(new DateTime(2027, 1, 1))?.IsOffDay == true, "Remote holiday merge");
+    True(metadata.GetHoliday(new DateTime(2027, 1, 2))?.IsOffDay == false, "Remote workday merge");
+    True(!metadata.TryApplyHolidayDocument(remoteJson, 2028), "Reject mismatched remote holiday year");
+
+    WithTemporaryDirectory(directory =>
+    {
+        var cachedMetadata = new CalendarMetadataService(path, directory);
+        using var updater = new HolidayUpdateService(cachedMetadata, directory, (_, _) => System.Threading.Tasks.Task.FromResult<string?>(remoteJson));
+        updater.RefreshForCalendarYearAsync(2027).GetAwaiter().GetResult();
+        True(File.Exists(Path.Combine(directory, "2027.json")), "Remote holiday cache write");
+        True(cachedMetadata.GetHoliday(new DateTime(2027, 1, 1))?.IsOffDay == true, "Downloaded holiday applied");
+        var reloadedMetadata = new CalendarMetadataService(path, directory);
+        True(reloadedMetadata.GetHoliday(new DateTime(2027, 1, 2))?.IsOffDay == false, "Holiday cache reload");
+    });
 }
 
 static void TestReleaseMetadata()
@@ -237,7 +293,7 @@ static void TestReleaseMetadata()
     var sdk = sdkDocument.RootElement.GetProperty("sdk");
     True(Version.TryParse(sdk.GetProperty("version").GetString(), out var sdkVersion) && sdkVersion.Build >= 0,
         "SDK version must be fully qualified");
-    Equal("latestPatch", sdk.GetProperty("rollForward").GetString(), "SDK roll-forward policy");
+    Equal("latestFeature", sdk.GetProperty("rollForward").GetString(), "SDK roll-forward policy");
 
     var packageVersions = XDocument.Load(Path.Combine(repositoryDirectory, "Directory.Packages.props"));
     var markdigVersion = packageVersions.Descendants("PackageVersion")

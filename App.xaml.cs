@@ -27,6 +27,7 @@ public partial class App : System.Windows.Application
 
     protected override void OnExit(ExitEventArgs e)
     {
+        _window?.DisposeHolidayUpdates();
         _window?.DisposeTray();
         _instanceGuard?.Dispose();
         base.OnExit(e);
