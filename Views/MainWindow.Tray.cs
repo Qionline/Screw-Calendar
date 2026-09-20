@@ -20,11 +20,11 @@ public sealed partial class MainWindow
         _tray.Show(ApplicationIconLoader.CurrentExecutableOrDefault(logError: AppLogger.Error), Localization.T("app.title"),
             () => { if (IsVisible) Hide(); else ShowWindow(); },
             [
+                new TrayMenuItem(Localization.T("tray.editTodo"), OpenTodayTodoFromTray),
+                TrayMenuItem.Separator(),
                 new TrayMenuItem(Localization.T("tray.startup"), () => SetStartupEnabled(!_state.StartWithWindows), true, _state.StartWithWindows),
                 new TrayMenuItem(Localization.T("tray.locked"), () => SetLocked(!_state.Locked), true, _state.Locked),
                 new TrayMenuItem(Localization.T("tray.topmost"), () => SetTopmost(!_state.Topmost), true, _state.Topmost),
-                TrayMenuItem.Separator(),
-                new TrayMenuItem(Localization.T("tray.editTodo"), OpenTodayTodoFromTray),
                 TrayMenuItem.Separator(),
                 new TrayMenuItem(Localization.T("tray.exit"), () => { _allowExit = true; Application.Current.Shutdown(); })
             ]);
