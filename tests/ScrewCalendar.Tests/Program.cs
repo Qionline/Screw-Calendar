@@ -307,13 +307,14 @@ static void TestReleaseMetadata()
         "Application package references should use central versions");
 
     var workflowDirectory = Path.Combine(repositoryDirectory, ".github", "workflows");
+    const string releaseSdkVersion = "8.0.425";
     foreach (var workflowName in new[] { "build.yml", "release.yml" })
     {
         var workflow = File.ReadAllText(Path.Combine(workflowDirectory, workflowName));
-        True(workflow.Contains("global-json-file: global.json", StringComparison.Ordinal),
-            $"{workflowName} must use global.json as the SDK source");
-        True(!workflow.Contains("dotnet-version:", StringComparison.Ordinal),
-            $"{workflowName} must not duplicate the SDK version");
+        True(workflow.Contains($"dotnet-version: {releaseSdkVersion}", StringComparison.Ordinal),
+            $"{workflowName} must use the locked release SDK {releaseSdkVersion}");
+        True(!workflow.Contains("global-json-file: global.json", StringComparison.Ordinal),
+            $"{workflowName} must not use the rolling developer SDK policy");
         True(!workflow.Contains("--self-contained", StringComparison.Ordinal) &&
              !workflow.Contains("-r win-x64", StringComparison.Ordinal),
             $"{workflowName} must use project publish settings");

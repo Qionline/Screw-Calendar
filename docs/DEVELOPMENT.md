@@ -238,7 +238,7 @@ dotnet publish .\ScrewCalendar.csproj -c Release --no-restore -o .\artifacts\pub
 artifacts\publish\ScrewCalendar.exe
 ```
 
-`artifacts/publish` 是整理后的免安装发布目录，其中包含 PDB、本地化 JSON、日历数据资源、项目许可证、README 和第三方声明。PDB 可在正式分发时不提供，但开发留档建议保留。创建版本标签与 GitHub Release 的完整流程见 [RELEASING.md](RELEASING.md)。
+`artifacts/publish` 是整理后的免安装发布目录，其中包含 PDB、本地化 JSON、日历数据资源、项目许可证、README 和第三方声明。PDB 可在正式分发时不提供，但开发留档建议保留。正式版本使用 `scripts/Release.ps1` 执行与 CI 一致的检查和标签推送；完整流程见 [RELEASING.md](RELEASING.md)。
 
 ## 发布前人工检查
 
