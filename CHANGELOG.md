@@ -6,7 +6,23 @@
 
 ## [Unreleased]
 
+暂无记录。
+
+## [1.0.0] - 2026-09-20
+
+### Added
+
 - 支持从 holiday-cn 静默更新中国法定节假日与调休数据，并在断网时回退到本地缓存或内置数据。
+- 支持经典、极简、紧凑三种样式、主题色切换、托盘菜单和今日待办编辑入口。
+
+### Changed
+
+- 设置页按日历布局、外观、底部待办、窗口行为、语言和本机数据分组。
+- 编辑待办窗口调整为约 324×403px，改善多行 Markdown 编辑空间。
+
+### Fixed
+
+- 今日待办编辑窗口打开时，底部今日待办区域暂停交互，避免复选框刷新造成窗口卡死。
 
 ## [0.1.0] - 2026-09-19
 
@@ -21,5 +37,6 @@
 - 简体中文和英文界面。
 - 开源仓库规范、自动化回归测试、持续集成和版本发布流程。
 
-[Unreleased]: https://github.com/Qionline/Screw-Calendar/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Qionline/Screw-Calendar/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/Qionline/Screw-Calendar/releases/tag/v1.0.0
 [0.1.0]: https://github.com/Qionline/Screw-Calendar/releases/tag/v0.1.0

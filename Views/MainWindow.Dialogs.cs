@@ -23,7 +23,7 @@ public sealed partial class MainWindow
     }
 
     private Window NewEventDialog(string title, Point? ownerPosition = null) =>
-        NewBorderlessDialog(title, 270, 310, 30, ownerPosition);
+        NewBorderlessDialog(title, 324, 403, 30, ownerPosition);
 
     private Window NewSettingsDialog(string title, Point? ownerPosition = null) =>
         NewBorderlessDialog(title, 420, 680, 68, ownerPosition);
