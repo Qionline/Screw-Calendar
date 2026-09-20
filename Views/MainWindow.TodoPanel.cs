@@ -71,6 +71,7 @@ public sealed partial class MainWindow
         _todoPanel.BorderBrush = Line();
         var today = _today.Date;
         var todayMarkdown = _todayMarkdownPreview ?? GetMarkdownDocument(today, false);
+        var todayEditorOpen = _todayMarkdownPreviewSink is not null;
 
         if (string.IsNullOrWhiteSpace(todayMarkdown))
         {
@@ -79,7 +80,8 @@ public sealed partial class MainWindow
                 _state.PermanentMarkdown,
                 today,
                 true,
-                Localization.T("todo.editToday"));
+                Localization.T("todo.editToday"),
+                !todayEditorOpen);
             return;
         }
 
@@ -98,6 +100,12 @@ public sealed partial class MainWindow
         var right = BuildMarkdownSection(Localization.T("todo.today", FormatDay(today)), todayMarkdown, today, false);
         Grid.SetColumn(left, 0); columns.Children.Add(left);
         Grid.SetColumn(divider, 1); columns.Children.Add(divider);
+        if (todayEditorOpen)
+        {
+            right.IsEnabled = false;
+            right.IsHitTestVisible = false;
+            right.Opacity = .58;
+        }
         Grid.SetColumn(right, 2); columns.Children.Add(right);
         _todoPanel.Child = columns;
     }
@@ -110,7 +118,7 @@ public sealed partial class MainWindow
             _state.Style == CalendarStyle.Widget);
     }
 
-    private Grid BuildMarkdownSection(string heading, string markdown, DateTime date, bool permanent, string? secondaryAction = null)
+    private Grid BuildMarkdownSection(string heading, string markdown, DateTime date, bool permanent, string? secondaryAction = null, bool secondaryActionEnabled = true)
     {
         var section = new Grid();
         section.RowDefinitions.Add(new RowDefinition { Height = new GridLength(34) });
@@ -123,6 +131,7 @@ public sealed partial class MainWindow
         if (secondaryAction is not null)
         {
             var today = HeaderActionButton(secondaryAction);
+            today.IsEnabled = secondaryActionEnabled;
             today.Click += (_, _) => BeginInlineMarkdownEdit(date, false);
             actions.Children.Add(today);
         }
@@ -174,6 +183,7 @@ public sealed partial class MainWindow
 
     private void BeginInlineMarkdownEdit(DateTime date, bool permanent)
     {
+        if (!permanent && date.Date == _today.Date && _todayMarkdownPreviewSink is not null) return;
         _todoEditorActive = true;
         _windowLayerController.SetInteractive(true);
         var editor = new MarkdownBlockEditor(Foreground(), Muted(), InputBackground(), Line(), Accent(), _uiFont, LoadMarkdownImage);
@@ -295,6 +305,7 @@ public sealed partial class MainWindow
 
     private void ToggleMarkdownTask(DateTime date, bool permanent, int taskIndex, bool completed)
     {
+        if (!permanent && date.Date == _today.Date && _todayMarkdownPreviewSink is not null) return;
         var isTodayPreview = !permanent && date.Date == _today.Date && _todayMarkdownPreview is not null;
         var markdown = isTodayPreview ? _todayMarkdownPreview! : GetMarkdownDocument(date, permanent);
         var updated = MarkdownDocumentService.ToggleTask(markdown, taskIndex, completed);
