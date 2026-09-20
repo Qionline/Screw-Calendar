@@ -57,9 +57,9 @@ public sealed class MarkdownBlockEditor : Border
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled
         };
         PreviewMouseLeftButtonDown += FocusEditorFromBlankArea;
-        PreviewMouseLeftButtonDown += TrackSelectionAnchor;
-        PreviewMouseMove += ExtendSelectionAcrossBlocks;
-        PreviewMouseLeftButtonUp += FinishSelectionAcrossBlocks;
+        AddHandler(UIElement.PreviewMouseLeftButtonDownEvent, new MouseButtonEventHandler(TrackSelectionAnchor), true);
+        AddHandler(UIElement.PreviewMouseMoveEvent, new MouseEventHandler(ExtendSelectionAcrossBlocks), true);
+        AddHandler(UIElement.PreviewMouseLeftButtonUpEvent, new MouseButtonEventHandler(FinishSelectionAcrossBlocks), true);
         DataObject.AddPastingHandler(this, HandleCrossBlockPaste);
     }
 
