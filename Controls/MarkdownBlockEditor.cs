@@ -3,18 +3,25 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
-using ButtonBase = System.Windows.Controls.Primitives.ButtonBase;
-using ScrollBar = System.Windows.Controls.Primitives.ScrollBar;
 
 namespace ScrewCalendar;
 
+/// <summary>
+/// Markdown editor backed by one native WPF RichTextBox.
+///
+/// A single editing surface owns the caret and selection. This deliberately
+/// avoids stitching together independent text boxes, so native WPF handles
+/// drag selection, Ctrl+A, copy, paste, deletion, and replacement across
+/// every paragraph.
+/// </summary>
 public sealed class MarkdownBlockEditor : Border
 {
-    private readonly StackPanel _panel = new();
-    private readonly List<EditorBlock> _blocks = [];
+    private readonly RichTextBox _editor;
     private readonly Brush _foreground;
     private readonly Brush _muted;
     private readonly Brush _surface;
@@ -22,17 +29,13 @@ public sealed class MarkdownBlockEditor : Border
     private readonly Brush _accent;
     private readonly FontFamily _fontFamily;
     private readonly Func<string, BitmapSource?> _imageLoader;
-    private EditorBlock? _activeBlock;
-    // Blocks keep independent typography, while these fields bridge selection across their TextBoxes.
-    private TextBox? _selectionAnchorEditor;
-    private int _selectionAnchorOffset;
-    private bool _dragSelectingAcrossBlocks;
-    private bool _hasCrossBlockSelection;
-    private int _selectionStartBlock;
-    private int _selectionStartOffset;
-    private int _selectionEndBlock;
-    private int _selectionEndOffset;
+    private readonly Dictionary<Paragraph, ParagraphMetadata> _paragraphMetadata = [];
+    private readonly Dictionary<BlockUIContainer, ImageMetadata> _imageMetadata = [];
     private bool _loading;
+    private bool _enterNormalizationScheduled;
+    private Paragraph? _pendingEnterSource;
+    private MarkdownLineKind? _pendingEnterKind;
+    private int _pendingEnterIndent;
 
     public MarkdownBlockEditor(Brush foreground, Brush muted, Brush surface, Brush line, Brush accent, FontFamily fontFamily, Func<string, BitmapSource?> imageLoader)
     {
@@ -43,485 +46,372 @@ public sealed class MarkdownBlockEditor : Border
         _accent = accent;
         _fontFamily = fontFamily;
         _imageLoader = imageLoader;
+
         Background = surface;
         BorderBrush = line;
         BorderThickness = new Thickness(1);
         CornerRadius = new CornerRadius(7);
         Padding = new Thickness(10, 8, 10, 8);
-        if (Application.Current?.TryFindResource("ToolkitMinimalScrollBarStyle") is Style scrollBarStyle)
-            Resources.Add(typeof(ScrollBar), scrollBarStyle);
-        Child = new ScrollViewer
+
+        _editor = new RichTextBox
         {
-            Content = _panel,
+            Background = Brushes.Transparent,
+            BorderThickness = new Thickness(0),
+            Foreground = foreground,
+            FontFamily = fontFamily,
+            FontSize = 14,
+            Padding = new Thickness(4, 3, 4, 3),
+            AcceptsTab = true,
+            IsDocumentEnabled = true,
+            AllowDrop = true,
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            SelectionBrush = accent,
+            SelectionOpacity = .35,
+            IsInactiveSelectionHighlightEnabled = true
         };
-        PreviewMouseLeftButtonDown += FocusEditorFromBlankArea;
-        AddHandler(UIElement.PreviewMouseMoveEvent, new MouseEventHandler(ExtendSelectionAcrossBlocks), true);
-        DataObject.AddPastingHandler(this, HandleCrossBlockPaste);
+        _editor.Document = new FlowDocument
+        {
+            PagePadding = new Thickness(0),
+            FontFamily = fontFamily,
+            FontSize = 14,
+            Foreground = foreground
+        };
+        if (Application.Current?.TryFindResource("ToolkitMinimalScrollBarStyle") is Style scrollBarStyle)
+            _editor.Resources.Add(typeof(ScrollBar), scrollBarStyle);
+
+        _editor.TextChanged += (_, _) =>
+        {
+            PruneMetadata();
+            ScheduleEnterNormalization();
+            RaiseChanged();
+        };
+        _editor.PreviewKeyDown += TrackEnterInheritance;
+        _editor.CommandBindings.Add(new CommandBinding(ApplicationCommands.Copy, HandleCopyCommand));
+        _editor.CommandBindings.Add(new CommandBinding(ApplicationCommands.Cut, HandleCutCommand));
+        _editor.CommandBindings.Add(new CommandBinding(ApplicationCommands.Paste, HandlePasteCommand));
+        Child = _editor;
     }
 
     public event EventHandler? ContentChanged;
 
     public void SetMarkdown(string markdown)
     {
-        ClearCrossBlockSelection();
-        _selectionAnchorEditor = null;
+        ClearPendingEnterNormalization();
         _loading = true;
-        _panel.Children.Clear();
-        _blocks.Clear();
-        foreach (var line in MarkdownDocumentService.ParseLines(markdown)) AddBlock(line);
-        if (_blocks.Count == 0) AddBlock(new MarkdownLine(MarkdownLineKind.Paragraph, string.Empty));
+        _editor.Document.Blocks.Clear();
+        _paragraphMetadata.Clear();
+        _imageMetadata.Clear();
+
+        foreach (var line in MarkdownDocumentService.ParseLines(markdown))
+        {
+            if (line.Kind == MarkdownLineKind.Image)
+                _editor.Document.Blocks.Add(CreateImageBlock(line.ImagePath ?? string.Empty, line.Text));
+            else
+                _editor.Document.Blocks.Add(CreateParagraph(line));
+        }
+
+        if (_editor.Document.Blocks.Count == 0)
+            _editor.Document.Blocks.Add(CreateParagraph(new MarkdownLine(MarkdownLineKind.Paragraph, string.Empty)));
         _loading = false;
     }
 
-    public string GetMarkdown() => MarkdownDocumentService.SerializeLines(_blocks.Select(block => block.ToMarkdownLine()));
+    public string GetMarkdown()
+    {
+        var snapshot = BuildSourceDocument();
+        return MarkdownDocumentService.SerializeLines(snapshot.Lines.Select(item => item.Line));
+    }
 
     public void ApplyKind(MarkdownLineKind kind)
     {
-        if (_hasCrossBlockSelection)
+        if (kind == MarkdownLineKind.Image) return;
+
+        var selected = GetSelectedParagraphs();
+        if (selected.Count == 0)
         {
-            var start = _selectionStartBlock;
-            var end = _selectionEndBlock;
-            ClearCrossBlockSelection();
-            _loading = true;
-            for (var index = start; index <= end; index++)
-            {
-                var selected = _blocks[index];
-                if (selected.Kind == MarkdownLineKind.Image) continue;
-                selected.Kind = kind;
-                if (kind != MarkdownLineKind.Task) selected.IsChecked = false;
-                RefreshBlock(selected);
-            }
-            _loading = false;
-            RaiseChanged();
-            _blocks[Math.Clamp(start, 0, _blocks.Count - 1)].Editor.Focus();
-            return;
+            var paragraph = GetCurrentParagraph() ?? CreateParagraph(new MarkdownLine(MarkdownLineKind.Paragraph, string.Empty));
+            if (!_editor.Document.Blocks.Contains(paragraph)) _editor.Document.Blocks.Add(paragraph);
+            selected = [paragraph];
         }
 
-        var block = _activeBlock ?? _blocks.LastOrDefault();
-        if (block is null || block.Kind == MarkdownLineKind.Image)
+        var selectionStart = selected[0].ContentStart;
+        var selectionEnd = selected[^1].ContentEnd;
+        _loading = true;
+        foreach (var paragraph in selected)
         {
-            AddBlock(new MarkdownLine(kind, string.Empty));
-            return;
+            var metadata = GetParagraphMetadata(paragraph);
+            var text = ExtractParagraphText(paragraph, metadata.Kind);
+            metadata.Kind = kind;
+            if (kind != MarkdownLineKind.Task) metadata.IsChecked = false;
+            ReplaceParagraphContent(paragraph, metadata, text);
         }
-        block.Kind = kind;
-        RefreshBlock(block);
+        _loading = false;
+        RestoreSelection(selectionStart, selectionEnd);
         RaiseChanged();
-        block.Editor.Focus();
     }
 
     public void AddImage(string relativePath, string altText = "image")
     {
-        var activeIndex = _activeBlock is null ? _blocks.Count - 1 : _blocks.IndexOf(_activeBlock);
-        var insertAt = Math.Clamp(activeIndex + 1, 0, _blocks.Count);
-        AddBlock(new MarkdownLine(MarkdownLineKind.Image, altText, ImagePath: relativePath), insertAt);
-        var imageHost = _blocks[insertAt].Host;
-        if (imageHost is FrameworkElement element)
-            Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, new Action(element.BringIntoView));
+        var current = GetCurrentBlock();
+        var block = CreateImageBlock(relativePath, altText);
+        if (current is null)
+        {
+            _editor.Document.Blocks.Add(block);
+        }
+        else
+        {
+            var blocks = _editor.Document.Blocks.ToList();
+            var currentIndex = blocks.IndexOf(current);
+            if (currentIndex < 0 || currentIndex == blocks.Count - 1)
+                _editor.Document.Blocks.Add(block);
+            else
+                _editor.Document.Blocks.InsertBefore(blocks[currentIndex + 1], block);
+        }
+        block.BringIntoView();
+        RaiseChanged();
     }
 
     public void FocusEditor()
     {
-        var block = _blocks.LastOrDefault(item => item.Kind != MarkdownLineKind.Image);
-        if (block is null)
+        var paragraph = _editor.Document.Blocks.OfType<Paragraph>().LastOrDefault();
+        if (paragraph is null)
         {
-            AddBlock(new MarkdownLine(MarkdownLineKind.Paragraph, string.Empty));
-            block = _blocks[^1];
+            paragraph = CreateParagraph(new MarkdownLine(MarkdownLineKind.Paragraph, string.Empty));
+            _editor.Document.Blocks.Add(paragraph);
         }
-        _activeBlock = block;
-        block.Editor.Focus();
-        block.Editor.CaretIndex = block.Editor.Text.Length;
+        _editor.Focus();
+        _editor.CaretPosition = paragraph.ContentEnd;
     }
 
-    private void FocusEditorFromBlankArea(object sender, MouseButtonEventArgs eventArgs)
+    private void TrackEnterInheritance(object sender, KeyEventArgs eventArgs)
     {
-        if (eventArgs.ChangedButton != MouseButton.Left || IsInteractiveSource(eventArgs.OriginalSource as DependencyObject)) return;
-        FocusEditor();
-        eventArgs.Handled = true;
+        if (eventArgs.Key != Key.Enter || Keyboard.Modifiers != ModifierKeys.None) return;
+        if (_editor.Selection.Start.CompareTo(_editor.Selection.End) != 0) return;
+
+        var paragraph = GetCurrentParagraph();
+        if (paragraph is null) return;
+        var metadata = GetParagraphMetadata(paragraph);
+        if (metadata.Kind is not (MarkdownLineKind.Bullet or MarkdownLineKind.Task)) return;
+
+        _pendingEnterSource = paragraph;
+        _pendingEnterKind = metadata.Kind;
+        _pendingEnterIndent = metadata.Indent;
+        _enterNormalizationScheduled = false;
     }
 
-    private void TrackSelectionAnchor(object sender, MouseButtonEventArgs eventArgs)
+    private void ScheduleEnterNormalization()
     {
-        if (eventArgs.ChangedButton != MouseButton.Left) return;
-        var editor = FindEditor(eventArgs.OriginalSource as DependencyObject) ?? eventArgs.Source as TextBox;
-        if (editor is null)
-        {
-            _selectionAnchorEditor = null;
-            return;
-        }
-
-        ClearCrossBlockSelection();
-        _selectionAnchorEditor = editor;
-        _selectionAnchorOffset = CharacterIndex(editor, eventArgs.GetPosition(editor));
-        _dragSelectingAcrossBlocks = false;
+        if (_loading || _pendingEnterKind is null || _enterNormalizationScheduled) return;
+        _enterNormalizationScheduled = true;
+        Dispatcher.BeginInvoke(
+            System.Windows.Threading.DispatcherPriority.Background,
+            new Action(NormalizeInheritedParagraph));
     }
 
-    private void ExtendSelectionAcrossBlocks(object sender, MouseEventArgs eventArgs)
+    private void NormalizeInheritedParagraph()
     {
-        if (_selectionAnchorEditor is null || Mouse.LeftButton != MouseButtonState.Pressed) return;
-        var target = FindEditor(eventArgs.OriginalSource as DependencyObject)
-            ?? eventArgs.Source as TextBox
-            ?? FindEditor(Mouse.DirectlyOver as DependencyObject);
-        if (target is null || (ReferenceEquals(target, _selectionAnchorEditor) && !_dragSelectingAcrossBlocks)) return;
+        _enterNormalizationScheduled = false;
+        var kind = _pendingEnterKind;
+        var source = _pendingEnterSource;
+        var indent = _pendingEnterIndent;
+        ClearPendingEnterNormalization();
+        if (kind is null || source is null || _loading) return;
 
-        if (!_dragSelectingAcrossBlocks)
-        {
-            _dragSelectingAcrossBlocks = true;
-            CaptureMouse();
-        }
+        var target = GetCurrentParagraph();
+        if (target is null || ReferenceEquals(target, source)) return;
 
-        ApplyBlockSelection(_selectionAnchorEditor, _selectionAnchorOffset, target, CharacterIndex(target, eventArgs.GetPosition(target)));
-        eventArgs.Handled = true;
-    }
-
-    private void FinishSelectionAcrossBlocks(object sender, MouseButtonEventArgs eventArgs)
-    {
-        if (!_dragSelectingAcrossBlocks || eventArgs.ChangedButton != MouseButton.Left) return;
-        var target = FindEditor(eventArgs.OriginalSource as DependencyObject)
-            ?? eventArgs.Source as TextBox
-            ?? FindEditor(Mouse.DirectlyOver as DependencyObject);
-        if (target is not null)
-            ApplyBlockSelection(_selectionAnchorEditor!, _selectionAnchorOffset, target, CharacterIndex(target, eventArgs.GetPosition(target)));
-        ReleaseMouseCapture();
-        _selectionAnchorEditor = null;
-        _dragSelectingAcrossBlocks = false;
-        eventArgs.Handled = true;
-    }
-
-    private bool HandleSelectionCommand(KeyEventArgs eventArgs)
-    {
-        var control = (Keyboard.Modifiers & ModifierKeys.Control) != 0;
-        if (control && eventArgs.Key == Key.A)
-        {
-            SelectAllBlocks();
-            eventArgs.Handled = true;
-            return true;
-        }
-
-        if (_hasCrossBlockSelection && control && eventArgs.Key == Key.C)
-        {
-            CopyCrossBlockSelection();
-            eventArgs.Handled = true;
-            return true;
-        }
-
-        if (_hasCrossBlockSelection && control && eventArgs.Key == Key.X)
-        {
-            CopyCrossBlockSelection();
-            ReplaceCrossBlockSelection(string.Empty);
-            eventArgs.Handled = true;
-            return true;
-        }
-
-        if (_hasCrossBlockSelection && eventArgs.Key is Key.Back or Key.Delete)
-        {
-            ReplaceCrossBlockSelection(string.Empty);
-            eventArgs.Handled = true;
-            return true;
-        }
-
-        if (_hasCrossBlockSelection && eventArgs.Key == Key.Enter)
-        {
-            var startBlock = _blocks[_selectionStartBlock];
-            var nextKind = startBlock.Kind is MarkdownLineKind.Bullet or MarkdownLineKind.Task ? startBlock.Kind : MarkdownLineKind.Paragraph;
-            ReplaceCrossBlockSelection(string.Empty);
-            var index = _blocks.IndexOf(startBlock) + 1;
-            AddBlock(new MarkdownLine(nextKind, string.Empty, Indent: startBlock.Indent), index);
-            _blocks[index].Editor.Focus();
-            eventArgs.Handled = true;
-            return true;
-        }
-
-        if (_hasCrossBlockSelection && eventArgs.Key is Key.Left or Key.Right or Key.Up or Key.Down or Key.Home or Key.End)
-            ClearCrossBlockSelection();
-        return false;
-    }
-
-    private void HandleCrossBlockPaste(object sender, DataObjectPastingEventArgs eventArgs)
-    {
-        if (!_hasCrossBlockSelection || !eventArgs.SourceDataObject.GetDataPresent(DataFormats.UnicodeText)) return;
-        var text = eventArgs.SourceDataObject.GetData(DataFormats.UnicodeText) as string;
-        if (text is null) return;
-        ReplaceCrossBlockSelection(text);
-        eventArgs.CancelCommand();
-    }
-
-    private void ApplyBlockSelection(TextBox anchor, int anchorOffset, TextBox target, int targetOffset)
-    {
-        var anchorIndex = FindBlockIndex(anchor);
-        var targetIndex = FindBlockIndex(target);
-        if (anchorIndex < 0 || targetIndex < 0) return;
-
-        foreach (var block in _blocks)
-            if (block.Kind != MarkdownLineKind.Image)
-                block.Editor.Select(0, 0);
-
-        var forward = anchorIndex < targetIndex || anchorIndex == targetIndex && anchorOffset <= targetOffset;
-        var startIndex = forward ? anchorIndex : targetIndex;
-        var endIndex = forward ? targetIndex : anchorIndex;
-        var startOffset = forward ? anchorOffset : targetOffset;
-        var endOffset = forward ? targetOffset : anchorOffset;
-
-        if (startIndex == endIndex)
-        {
-            _blocks[startIndex].Editor.Select(startOffset, Math.Max(0, endOffset - startOffset));
-            _hasCrossBlockSelection = false;
-            _selectionStartBlock = startIndex;
-            _selectionStartOffset = startOffset;
-            _selectionEndBlock = endIndex;
-            _selectionEndOffset = endOffset;
-            return;
-        }
-
-        var startEditor = _blocks[startIndex].Editor;
-        var endEditor = _blocks[endIndex].Editor;
-        startEditor.Select(Math.Clamp(startOffset, 0, startEditor.Text.Length), Math.Max(0, startEditor.Text.Length - startOffset));
-        for (var index = startIndex + 1; index < endIndex; index++)
-            if (_blocks[index].Kind != MarkdownLineKind.Image)
-                _blocks[index].Editor.SelectAll();
-        endEditor.Select(0, Math.Clamp(endOffset, 0, endEditor.Text.Length));
-
-        _hasCrossBlockSelection = true;
-        _selectionStartBlock = startIndex;
-        _selectionStartOffset = Math.Clamp(startOffset, 0, startEditor.Text.Length);
-        _selectionEndBlock = endIndex;
-        _selectionEndOffset = Math.Clamp(endOffset, 0, endEditor.Text.Length);
-    }
-
-    private void SelectAllBlocks()
-    {
-        ClearCrossBlockSelection();
-        var textBlocks = _blocks
-            .Select((block, index) => (block, index))
-            .Where(item => item.block.Kind != MarkdownLineKind.Image)
-            .ToList();
-        if (textBlocks.Count == 0) return;
-
-        foreach (var item in textBlocks)
-            item.block.Editor.SelectAll();
-        _selectionStartBlock = textBlocks[0].index;
-        _selectionStartOffset = 0;
-        _selectionEndBlock = textBlocks[^1].index;
-        _selectionEndOffset = textBlocks[^1].block.Editor.Text.Length;
-        _hasCrossBlockSelection = textBlocks.Count > 1;
-    }
-
-    private void CopyCrossBlockSelection()
-    {
-        if (!_hasCrossBlockSelection) return;
-        var lines = new List<string>();
-        for (var index = _selectionStartBlock; index <= _selectionEndBlock; index++)
-        {
-            var block = _blocks[index];
-            if (block.Editor is null) continue;
-            var start = index == _selectionStartBlock ? _selectionStartOffset : 0;
-            var end = index == _selectionEndBlock ? _selectionEndOffset : block.Editor.Text.Length;
-            if (end <= start) continue;
-            var selected = block.ToMarkdownLine() with { Text = block.Editor.Text[start..end] };
-            lines.Add(MarkdownDocumentService.SerializeLines(new[] { selected }));
-        }
-        if (lines.Count > 0) Clipboard.SetText(string.Join(Environment.NewLine, lines));
-    }
-
-    private void ReplaceCrossBlockSelection(string replacement)
-    {
-        if (!_hasCrossBlockSelection) return;
-        var startBlock = _blocks[_selectionStartBlock];
-        var endBlock = _blocks[_selectionEndBlock];
-        var prefix = startBlock.Editor.Text[.._selectionStartOffset];
-        var suffix = endBlock.Editor.Text[_selectionEndOffset..];
-        var replacementLines = replacement.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n').Split('\n');
-
+        var metadata = GetParagraphMetadata(target);
+        var text = ExtractParagraphText(target, metadata.Kind);
+        metadata.Kind = kind.Value;
+        metadata.Indent = indent;
+        metadata.IsChecked = false;
         _loading = true;
-        for (var index = _selectionEndBlock; index > _selectionStartBlock; index--)
-        {
-            _blocks.RemoveAt(index);
-            _panel.Children.RemoveAt(index);
-        }
-
-        startBlock.Editor.Text = prefix + replacementLines[0] + (replacementLines.Length == 1 ? suffix : string.Empty);
-        var caretBlock = startBlock;
-        var caret = prefix.Length + replacementLines[0].Length;
-        var insertIndex = _selectionStartBlock + 1;
-        for (var lineIndex = 1; lineIndex < replacementLines.Length; lineIndex++)
-        {
-            var line = replacementLines[lineIndex] + (lineIndex == replacementLines.Length - 1 ? suffix : string.Empty);
-            var newBlock = new MarkdownLine(startBlock.Kind, line, Indent: startBlock.Indent);
-            AddBlock(newBlock, insertIndex++);
-            caretBlock = _blocks[insertIndex - 1];
-            caret = replacementLines[lineIndex].Length;
-        }
+        ReplaceParagraphContent(target, metadata, text);
         _loading = false;
-        _hasCrossBlockSelection = false;
-        _selectionAnchorEditor = null;
-        caretBlock.Editor.Focus();
-        caretBlock.Editor.CaretIndex = Math.Clamp(caret, 0, caretBlock.Editor.Text.Length);
         RaiseChanged();
     }
 
-    private void ClearCrossBlockSelection()
+    private void ClearPendingEnterNormalization()
     {
-        if (!_hasCrossBlockSelection) return;
-        foreach (var block in _blocks)
-            if (block.Kind != MarkdownLineKind.Image)
-                block.Editor.Select(0, 0);
-        _hasCrossBlockSelection = false;
+        _pendingEnterSource = null;
+        _pendingEnterKind = null;
+        _pendingEnterIndent = 0;
+        _enterNormalizationScheduled = false;
     }
 
-    private int FindBlockIndex(TextBox editor) => _blocks.FindIndex(block => ReferenceEquals(block.Editor, editor));
-
-    private static TextBox? FindEditor(DependencyObject? source)
+    private void HandleCopyCommand(object sender, ExecutedRoutedEventArgs eventArgs)
     {
-        while (source is not null)
-        {
-            if (source is TextBox editor) return editor;
-            source = source is Visual visual ? VisualTreeHelper.GetParent(visual) : LogicalTreeHelper.GetParent(source);
-        }
-        return null;
-    }
+        if (_editor.Selection.Start.CompareTo(_editor.Selection.End) == 0) return;
+        var markdown = GetSelectedMarkdown();
+        if (markdown is null) return;
 
-    private static int CharacterIndex(TextBox editor, Point point)
-    {
-        var index = editor.GetCharacterIndexFromPoint(point, false);
-        return Math.Clamp(index < 0 ? editor.Text.Length : index, 0, editor.Text.Length);
-    }
-
-    private static bool IsInteractiveSource(DependencyObject? source)
-    {
-        while (source is not null)
+        try
         {
-            if (source is TextBox or ButtonBase or ScrollBar) return true;
-            source = source is Visual visual ? VisualTreeHelper.GetParent(visual) : LogicalTreeHelper.GetParent(source);
-        }
-        return false;
-    }
-
-    private void AddBlock(MarkdownLine line, int? insertAt = null)
-    {
-        var block = new EditorBlock(line);
-        block.Editor = new TextBox
-        {
-            Text = line.Text,
-            BorderThickness = new Thickness(0),
-            Background = Brushes.Transparent,
-            Foreground = _foreground,
-            FontFamily = _fontFamily,
-            Padding = new Thickness(4, 3, 4, 3),
-            VerticalContentAlignment = VerticalAlignment.Center,
-            TextWrapping = TextWrapping.Wrap,
-            AcceptsReturn = false
-        };
-        block.Editor.AddHandler(UIElement.PreviewMouseLeftButtonDownEvent, new MouseButtonEventHandler(TrackSelectionAnchor), true);
-        block.Editor.AddHandler(UIElement.PreviewMouseMoveEvent, new MouseEventHandler(ExtendSelectionAcrossBlocks), true);
-        block.Editor.AddHandler(UIElement.PreviewMouseLeftButtonUpEvent, new MouseButtonEventHandler(FinishSelectionAcrossBlocks), true);
-        block.Editor.IsInactiveSelectionHighlightEnabled = true;
-        block.Editor.SelectionBrush = _accent;
-        block.Editor.SelectionOpacity = .35;
-        block.Editor.GotKeyboardFocus += (_, _) => _activeBlock = block;
-        block.Editor.TextChanged += (_, _) => RaiseChanged();
-        block.Editor.PreviewTextInput += (_, eventArgs) =>
-        {
-            if (!_hasCrossBlockSelection) return;
-            ReplaceCrossBlockSelection(eventArgs.Text);
+            Clipboard.SetText(markdown);
             eventArgs.Handled = true;
-        };
-        block.Editor.PreviewKeyDown += (_, eventArgs) =>
+        }
+        catch (Exception exception)
         {
-            if (HandleSelectionCommand(eventArgs)) return;
-            if (eventArgs.Key == Key.Enter)
-            {
-                eventArgs.Handled = true;
-                var index = _blocks.IndexOf(block) + 1;
-                var nextKind = block.Kind is MarkdownLineKind.Bullet or MarkdownLineKind.Task ? block.Kind : MarkdownLineKind.Paragraph;
-                AddBlock(new MarkdownLine(nextKind, string.Empty, Indent: block.Indent), index);
-                _blocks[index].Editor.Focus();
-                return;
-            }
-            if (eventArgs.Key != Key.Back || block.Editor.Text.Length != 0 || _blocks.Count <= 1) return;
+            AppLogger.Error("Failed to copy Markdown selection.", exception);
+        }
+    }
+
+    private void HandleCutCommand(object sender, ExecutedRoutedEventArgs eventArgs)
+    {
+        if (_editor.Selection.Start.CompareTo(_editor.Selection.End) == 0) return;
+        var markdown = GetSelectedMarkdown();
+        if (markdown is null) return;
+
+        try
+        {
+            Clipboard.SetText(markdown);
+            ReplaceSelectedMarkdown(string.Empty);
             eventArgs.Handled = true;
-            var currentIndex = _blocks.IndexOf(block);
-            _blocks.RemoveAt(currentIndex);
-            _panel.Children.RemoveAt(currentIndex);
-            var previous = _blocks[Math.Max(0, currentIndex - 1)].Editor;
-            previous.Focus();
-            previous.CaretIndex = previous.Text.Length;
-            RaiseChanged();
-        };
-        block.Host = CreateHost(block);
-        var targetIndex = insertAt ?? _blocks.Count;
-        _blocks.Insert(targetIndex, block);
-        _panel.Children.Insert(targetIndex, block.Host);
-        if (!_loading) RaiseChanged();
+        }
+        catch (Exception exception)
+        {
+            AppLogger.Error("Failed to cut Markdown selection.", exception);
+        }
     }
 
-    private UIElement CreateHost(EditorBlock block)
+    private void HandlePasteCommand(object sender, ExecutedRoutedEventArgs eventArgs)
     {
-        if (block.Kind == MarkdownLineKind.Image) return CreateImageHost(block);
-        var row = new Grid { Margin = new Thickness(block.Indent * 18, 1, 0, 1), MinHeight = 32 };
-        var hasMarker = block.Kind is MarkdownLineKind.Bullet or MarkdownLineKind.Task;
-        if (hasMarker)
+        if (Clipboard.ContainsImage() || Clipboard.ContainsFileDropList() || !Clipboard.ContainsText()) return;
+
+        try
         {
-            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(30) });
-            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            block.Marker = CreateMarker(block);
-            row.Children.Add(block.Marker);
-            Grid.SetColumn(block.Editor, 1);
+            ReplaceSelectedMarkdown(Clipboard.GetText());
+            eventArgs.Handled = true;
         }
-        else
+        catch (Exception exception)
         {
-            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            block.Marker = null;
-            Grid.SetColumn(block.Editor, 0);
+            AppLogger.Error("Failed to paste Markdown text.", exception);
         }
-        row.Children.Add(block.Editor);
-        ApplyEditorTypography(block);
-        return row;
     }
 
-    private UIElement CreateMarker(EditorBlock block)
+    private string? GetSelectedMarkdown()
     {
-        if (block.Kind == MarkdownLineKind.Task)
+        var snapshot = BuildSourceDocument();
+        if (snapshot.Lines.Count == 0) return null;
+
+        var start = GetSourceOffset(snapshot, _editor.Selection.Start);
+        var end = GetSourceOffset(snapshot, _editor.Selection.End);
+        if (start > end) (start, end) = (end, start);
+        return snapshot.Text[Math.Clamp(start, 0, snapshot.Text.Length)..Math.Clamp(end, 0, snapshot.Text.Length)];
+    }
+
+    private void ReplaceSelectedMarkdown(string replacement)
+    {
+        var snapshot = BuildSourceDocument();
+        if (snapshot.Lines.Count == 0) return;
+
+        var start = GetSourceOffset(snapshot, _editor.Selection.Start);
+        var end = GetSourceOffset(snapshot, _editor.Selection.End);
+        if (start > end) (start, end) = (end, start);
+        start = Math.Clamp(start, 0, snapshot.Text.Length);
+        end = Math.Clamp(end, start, snapshot.Text.Length);
+        var normalized = replacement
+            .Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Replace('\r', '\n')
+            .Replace("\n", Environment.NewLine, StringComparison.Ordinal);
+        var updated = snapshot.Text[..start] + normalized + snapshot.Text[end..];
+
+        _loading = true;
+        SetMarkdown(updated);
+        _loading = false;
+        RestoreCaretAtSourceOffset(start + normalized.Length);
+        RaiseChanged();
+    }
+
+    private Paragraph CreateParagraph(MarkdownLine line)
+    {
+        var paragraph = new Paragraph();
+        var metadata = new ParagraphMetadata(line.Kind, line.IsChecked, line.Indent);
+        _paragraphMetadata[paragraph] = metadata;
+        ReplaceParagraphContent(paragraph, metadata, line.Text);
+        return paragraph;
+    }
+
+    private void ReplaceParagraphContent(Paragraph paragraph, ParagraphMetadata metadata, string text)
+    {
+        paragraph.Inlines.Clear();
+        ApplyParagraphTypography(paragraph, metadata);
+
+        if (metadata.Kind == MarkdownLineKind.Bullet)
         {
-            var checkbox = new CheckBox
+            paragraph.Inlines.Add(new Run("• ")
             {
-                IsChecked = block.IsChecked,
-                VerticalAlignment = VerticalAlignment.Center,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                Style = Application.Current?.TryFindResource("ToolkitRoundedCheckBoxStyle") as Style
-            };
-            checkbox.Checked += (_, _) => { block.IsChecked = true; ApplyEditorTypography(block); RaiseChanged(); };
-            checkbox.Unchecked += (_, _) => { block.IsChecked = false; ApplyEditorTypography(block); RaiseChanged(); };
-            return checkbox;
+                Foreground = _accent,
+                FontWeight = FontWeights.SemiBold
+            });
         }
-        var label = block.Kind switch
+        else if (metadata.Kind == MarkdownLineKind.Task)
         {
-            MarkdownLineKind.Bullet => "•",
-            _ => string.Empty
-        };
-        return new TextBlock
-        {
-            Text = label,
-            Foreground = block.Kind == MarkdownLineKind.Bullet ? _accent : _muted,
-            FontSize = block.Kind == MarkdownLineKind.Bullet ? 17 : 10,
-            FontWeight = FontWeights.SemiBold,
-            HorizontalAlignment = HorizontalAlignment.Center,
-            VerticalAlignment = VerticalAlignment.Center
-        };
+            var checkbox = CreateTaskCheckBox(paragraph, metadata);
+            paragraph.Inlines.Add(new InlineUIContainer(checkbox)
+            {
+                BaselineAlignment = BaselineAlignment.Center
+            });
+            paragraph.Inlines.Add(new Run(" "));
+        }
+
+        paragraph.Inlines.Add(new Run(text ?? string.Empty));
     }
 
-    private UIElement CreateImageHost(EditorBlock block)
+    private CheckBox CreateTaskCheckBox(Paragraph paragraph, ParagraphMetadata metadata)
+    {
+        var checkbox = new CheckBox
+        {
+            IsChecked = metadata.IsChecked,
+            VerticalAlignment = VerticalAlignment.Center,
+            Focusable = true,
+            ToolTip = "完成任务",
+            Style = Application.Current?.TryFindResource("ToolkitRoundedCheckBoxStyle") as Style
+        };
+        checkbox.Checked += (_, _) => UpdateTaskState(paragraph, metadata, true);
+        checkbox.Unchecked += (_, _) => UpdateTaskState(paragraph, metadata, false);
+        return checkbox;
+    }
+
+    private void UpdateTaskState(Paragraph paragraph, ParagraphMetadata metadata, bool isChecked)
+    {
+        metadata.IsChecked = isChecked;
+        ApplyParagraphTypography(paragraph, metadata);
+        RaiseChanged();
+    }
+
+    private void ApplyParagraphTypography(Paragraph paragraph, ParagraphMetadata metadata)
+    {
+        paragraph.Margin = new Thickness(metadata.Indent * 18, metadata.Kind is MarkdownLineKind.Heading1 or MarkdownLineKind.Heading2 or MarkdownLineKind.Heading3 ? 4 : 1, 0, metadata.Kind is MarkdownLineKind.Heading1 or MarkdownLineKind.Heading2 or MarkdownLineKind.Heading3 ? 5 : 1);
+        paragraph.FontFamily = _fontFamily;
+        paragraph.FontSize = metadata.Kind switch
+        {
+            MarkdownLineKind.Heading1 => 24,
+            MarkdownLineKind.Heading2 => 20,
+            MarkdownLineKind.Heading3 => 17,
+            _ => 14
+        };
+        paragraph.FontWeight = metadata.Kind is MarkdownLineKind.Heading1 or MarkdownLineKind.Heading2 or MarkdownLineKind.Heading3
+            ? FontWeights.SemiBold
+            : FontWeights.Normal;
+        paragraph.Foreground = metadata.Kind == MarkdownLineKind.Task && metadata.IsChecked ? _muted : _foreground;
+        paragraph.TextDecorations = metadata.Kind == MarkdownLineKind.Task && metadata.IsChecked ? TextDecorations.Strikethrough : null;
+    }
+
+    private BlockUIContainer CreateImageBlock(string relativePath, string altText)
     {
         var host = new Grid { Margin = new Thickness(0, 6, 0, 6) };
-        var image = new Image
+        host.Children.Add(new Image
         {
-            Source = block.ImagePath is null ? null : _imageLoader(block.ImagePath),
+            Source = _imageLoader(relativePath),
             MaxHeight = 260,
             Stretch = Stretch.Uniform,
             StretchDirection = StretchDirection.DownOnly,
             HorizontalAlignment = HorizontalAlignment.Stretch
-        };
-        host.Children.Add(image);
+        });
+
+        var imageBlock = new BlockUIContainer(host) { Margin = new Thickness(0) };
+        _imageMetadata[imageBlock] = new ImageMetadata(altText, relativePath);
         var remove = new Button
         {
             Content = "×",
@@ -538,40 +428,315 @@ public sealed class MarkdownBlockEditor : Border
         };
         remove.Click += (_, _) =>
         {
-            var index = _blocks.IndexOf(block);
-            if (index < 0) return;
-            _blocks.RemoveAt(index);
-            _panel.Children.RemoveAt(index);
-            if (_blocks.Count == 0) AddBlock(new MarkdownLine(MarkdownLineKind.Paragraph, string.Empty));
+            if (!_editor.Document.Blocks.Contains(imageBlock)) return;
+            _editor.Document.Blocks.Remove(imageBlock);
+            _imageMetadata.Remove(imageBlock);
+            if (_editor.Document.Blocks.Count == 0)
+                _editor.Document.Blocks.Add(CreateParagraph(new MarkdownLine(MarkdownLineKind.Paragraph, string.Empty)));
             RaiseChanged();
         };
         host.Children.Add(remove);
-        return host;
+        return imageBlock;
     }
 
-    private void RefreshBlock(EditorBlock block)
+    private IReadOnlyList<Paragraph> GetSelectedParagraphs()
     {
-        var index = _blocks.IndexOf(block);
-        if (index < 0) return;
-        if (block.Editor.Parent is Panel previousParent)
-            previousParent.Children.Remove(block.Editor);
-        _panel.Children.RemoveAt(index);
-        block.Host = CreateHost(block);
-        _panel.Children.Insert(index, block.Host);
-    }
+        var start = _editor.Selection.Start;
+        var end = _editor.Selection.End;
+        if (start.CompareTo(end) > 0) (start, end) = (end, start);
 
-    private void ApplyEditorTypography(EditorBlock block)
-    {
-        block.Editor.FontSize = block.Kind switch
+        if (start.CompareTo(end) == 0)
         {
-            MarkdownLineKind.Heading1 => 24,
-            MarkdownLineKind.Heading2 => 20,
-            MarkdownLineKind.Heading3 => 17,
-            _ => 14
-        };
-        block.Editor.FontWeight = block.Kind is MarkdownLineKind.Heading1 or MarkdownLineKind.Heading2 or MarkdownLineKind.Heading3 ? FontWeights.SemiBold : FontWeights.Normal;
-        block.Editor.Foreground = block.Kind == MarkdownLineKind.Task && block.IsChecked ? _muted : _foreground;
-        block.Editor.TextDecorations = block.Kind == MarkdownLineKind.Task && block.IsChecked ? TextDecorations.Strikethrough : null;
+            var current = GetParagraphAt(start);
+            return current is null ? [] : [current];
+        }
+
+        return _editor.Document.Blocks
+            .OfType<Paragraph>()
+            .Where(paragraph => paragraph.ContentStart.CompareTo(end) < 0 && paragraph.ContentEnd.CompareTo(start) > 0)
+            .ToList();
+    }
+
+    private Paragraph? GetCurrentParagraph() => GetParagraphAt(_editor.Selection.Start);
+
+    private Paragraph? GetParagraphAt(TextPointer pointer)
+    {
+        var direct = pointer.Paragraph;
+        if (direct is not null && _editor.Document.Blocks.Contains(direct)) return direct;
+        return _editor.Document.Blocks
+            .OfType<Paragraph>()
+            .FirstOrDefault(paragraph => paragraph.ContentStart.CompareTo(pointer) <= 0 && paragraph.ContentEnd.CompareTo(pointer) >= 0);
+    }
+
+    private Block? GetCurrentBlock()
+    {
+        var paragraph = GetCurrentParagraph();
+        if (paragraph is not null) return paragraph;
+        return _editor.Document.Blocks.LastOrDefault();
+    }
+
+    private SourceDocument BuildSourceDocument()
+    {
+        PruneMetadata();
+        var lines = new List<SourceLine>();
+        var start = 0;
+        foreach (var block in _editor.Document.Blocks)
+        {
+            MarkdownLine? line = block switch
+            {
+                BlockUIContainer imageBlock when _imageMetadata.TryGetValue(imageBlock, out var image)
+                    => new MarkdownLine(MarkdownLineKind.Image, image.AltText, ImagePath: image.RelativePath),
+                Paragraph paragraph => CreateMarkdownLine(paragraph),
+                _ => null
+            };
+            if (line is null) continue;
+
+            var sourceText = MarkdownDocumentService.SerializeLine(line);
+            lines.Add(new SourceLine(block, line, sourceText, start));
+            start += sourceText.Length + Environment.NewLine.Length;
+        }
+
+        var documentText = string.Join(Environment.NewLine, lines.Select(item => item.SourceText));
+        return new SourceDocument(lines, documentText);
+    }
+
+    private MarkdownLine CreateMarkdownLine(Paragraph paragraph)
+    {
+        var metadata = GetParagraphMetadata(paragraph);
+        return new MarkdownLine(
+            metadata.Kind,
+            ExtractParagraphText(paragraph, metadata.Kind),
+            metadata.IsChecked,
+            metadata.Indent);
+    }
+
+    private int GetSourceOffset(SourceDocument snapshot, TextPointer pointer)
+    {
+        var sourceLine = FindSourceLine(snapshot, pointer);
+        if (sourceLine is null) return pointer.CompareTo(_editor.Document.ContentStart) <= 0 ? 0 : snapshot.Text.Length;
+
+        if (sourceLine.Block is not Paragraph paragraph)
+            return sourceLine.Start;
+        if (pointer.CompareTo(paragraph.ContentStart) <= 0)
+            return sourceLine.Start;
+
+        var prefixLength = MarkdownPrefixLength(sourceLine.Line);
+        var textOffset = GetParagraphTextOffset(paragraph, pointer, sourceLine.Line.Kind);
+        return Math.Clamp(sourceLine.Start + prefixLength + textOffset, sourceLine.Start, sourceLine.Start + sourceLine.SourceText.Length);
+    }
+
+    private static int MarkdownPrefixLength(MarkdownLine line) => line.Kind switch
+    {
+        MarkdownLineKind.Heading1 => 2,
+        MarkdownLineKind.Heading2 => 3,
+        MarkdownLineKind.Heading3 => 4,
+        MarkdownLineKind.Bullet => line.Indent * 2 + 2,
+        MarkdownLineKind.Task => line.Indent * 2 + 6,
+        _ => 0
+    };
+
+    private SourceLine? FindSourceLine(SourceDocument snapshot, TextPointer pointer)
+    {
+        var paragraph = pointer.Paragraph;
+        if (paragraph is not null)
+            return snapshot.Lines.FirstOrDefault(line => ReferenceEquals(line.Block, paragraph));
+
+        foreach (var line in snapshot.Lines)
+        {
+            if (pointer.CompareTo(line.Block.ContentStart) >= 0 && pointer.CompareTo(line.Block.ContentEnd) <= 0)
+                return line;
+        }
+        return pointer.CompareTo(_editor.Document.ContentStart) <= 0 ? snapshot.Lines.FirstOrDefault() : snapshot.Lines.LastOrDefault();
+    }
+
+    private static int GetParagraphTextOffset(Paragraph paragraph, TextPointer pointer, MarkdownLineKind kind)
+    {
+        var offset = 0;
+        foreach (var run in EnumerateRuns(paragraph.Inlines))
+        {
+            if (IsStructuralRun(paragraph, run, kind))
+            {
+                if (pointer.CompareTo(run.ContentEnd) < 0) return offset;
+                continue;
+            }
+
+            if (pointer.CompareTo(run.ContentStart) <= 0) return offset;
+            if (pointer.CompareTo(run.ContentEnd) < 0)
+                return offset + GetRunTextOffset(run, pointer);
+            offset += run.Text.Length;
+        }
+        return offset;
+    }
+
+    private static int GetRunTextOffset(Run run, TextPointer pointer)
+    {
+        if (pointer.CompareTo(run.ContentStart) <= 0) return 0;
+        if (pointer.CompareTo(run.ContentEnd) >= 0) return run.Text.Length;
+        var text = new TextRange(run.ContentStart, pointer).Text;
+        return Math.Clamp(text.Length, 0, run.Text.Length);
+    }
+
+    private static IEnumerable<Run> EnumerateRuns(IEnumerable<Inline> inlines)
+    {
+        foreach (var inline in inlines)
+        {
+            switch (inline)
+            {
+                case Run run:
+                    yield return run;
+                    break;
+                case Span span:
+                    foreach (var runInSpan in EnumerateRuns(span.Inlines)) yield return runInSpan;
+                    break;
+            }
+        }
+    }
+
+    private static bool IsStructuralRun(Paragraph paragraph, Run run, MarkdownLineKind kind)
+    {
+        if (kind == MarkdownLineKind.Bullet)
+            return ReferenceEquals(paragraph.Inlines.FirstInline, run) && run.Text.StartsWith("• ", StringComparison.Ordinal);
+        if (kind != MarkdownLineKind.Task) return false;
+
+        return paragraph.Inlines.FirstInline is InlineUIContainer first && ReferenceEquals(first.NextInline, run);
+    }
+
+    private void RestoreCaretAtSourceOffset(int offset)
+    {
+        var snapshot = BuildSourceDocument();
+        var pointer = GetPointerAtSourceOffset(snapshot, offset);
+        if (pointer is null)
+        {
+            FocusEditor();
+            return;
+        }
+        _editor.Focus();
+        _editor.CaretPosition = pointer;
+    }
+
+    private TextPointer? GetPointerAtSourceOffset(SourceDocument snapshot, int offset)
+    {
+        if (snapshot.Lines.Count == 0) return null;
+        offset = Math.Clamp(offset, 0, snapshot.Text.Length);
+
+        for (var index = 0; index < snapshot.Lines.Count; index++)
+        {
+            var line = snapshot.Lines[index];
+            var lineEnd = line.Start + line.SourceText.Length;
+            if (offset < line.Start)
+                return GetParagraphEnd(snapshot.Lines[index - 1]);
+            if (offset > lineEnd) continue;
+
+            if (line.Block is Paragraph paragraph)
+            {
+                var relative = offset - line.Start;
+                var prefixLength = MarkdownPrefixLength(line.Line);
+                if (relative <= prefixLength) return GetFirstTextPointer(paragraph, line.Line.Kind);
+                return GetParagraphTextPointer(paragraph, line.Line.Kind, relative - prefixLength);
+            }
+            return line.Block.ContentStart;
+        }
+        return GetParagraphEnd(snapshot.Lines[^1]);
+    }
+
+    private static TextPointer GetFirstTextPointer(Paragraph paragraph, MarkdownLineKind kind)
+    {
+        foreach (var run in EnumerateRuns(paragraph.Inlines))
+            if (!IsStructuralRun(paragraph, run, kind)) return run.ContentStart;
+        return paragraph.ContentEnd;
+    }
+
+    private static TextPointer GetParagraphTextPointer(Paragraph paragraph, MarkdownLineKind kind, int offset)
+    {
+        offset = Math.Max(0, offset);
+        foreach (var run in EnumerateRuns(paragraph.Inlines))
+        {
+            if (IsStructuralRun(paragraph, run, kind)) continue;
+            if (offset <= run.Text.Length)
+                return run.ContentStart.GetPositionAtOffset(offset, LogicalDirection.Forward);
+            offset -= run.Text.Length;
+        }
+        return paragraph.ContentEnd;
+    }
+
+    private static TextPointer GetParagraphEnd(SourceLine line) => line.Block is Paragraph paragraph ? paragraph.ContentEnd : line.Block.ContentEnd;
+
+    private void RestoreSelection(TextPointer start, TextPointer end)
+    {
+        try
+        {
+            _editor.Selection.Select(start, end);
+            _editor.Focus();
+        }
+        catch (ArgumentException)
+        {
+            FocusEditor();
+        }
+    }
+
+    private ParagraphMetadata GetParagraphMetadata(Paragraph paragraph)
+    {
+        if (_paragraphMetadata.TryGetValue(paragraph, out var metadata)) return metadata;
+
+        var firstInline = paragraph.Inlines.FirstInline;
+        var kind = firstInline is InlineUIContainer { Child: CheckBox }
+            ? MarkdownLineKind.Task
+            : firstInline is Run { Text: string text } && text.StartsWith("• ", StringComparison.Ordinal)
+                ? MarkdownLineKind.Bullet
+                : paragraph.FontSize switch
+                {
+                    >= 22 => MarkdownLineKind.Heading1,
+                    >= 18 => MarkdownLineKind.Heading2,
+                    >= 16 => MarkdownLineKind.Heading3,
+                    _ => MarkdownLineKind.Paragraph
+                };
+        var isChecked = firstInline is InlineUIContainer { Child: CheckBox checkbox } && checkbox.IsChecked == true;
+        metadata = new ParagraphMetadata(kind, isChecked, Math.Max(0, (int)Math.Round(paragraph.Margin.Left / 18)));
+        _paragraphMetadata[paragraph] = metadata;
+        return metadata;
+    }
+
+    private static string ExtractParagraphText(Paragraph paragraph, MarkdownLineKind kind)
+    {
+        var text = new System.Text.StringBuilder();
+        foreach (var inline in paragraph.Inlines)
+            AppendInlineText(inline, text);
+
+        var value = text.ToString();
+        if (kind == MarkdownLineKind.Bullet && value.StartsWith("• ", StringComparison.Ordinal))
+            value = value[2..];
+        else if (kind == MarkdownLineKind.Task && value.StartsWith(' '))
+            value = value[1..];
+        return value;
+    }
+
+    private static void AppendInlineText(Inline inline, System.Text.StringBuilder target)
+    {
+        switch (inline)
+        {
+            case Run run:
+                target.Append(run.Text);
+                break;
+            case LineBreak:
+                target.Append('\n');
+                break;
+            case InlineUIContainer:
+                break;
+            case Span span:
+                foreach (var child in span.Inlines) AppendInlineText(child, target);
+                break;
+        }
+    }
+
+    private void PruneMetadata()
+    {
+        var paragraphs = _editor.Document.Blocks.OfType<Paragraph>().ToHashSet();
+        foreach (var paragraph in _paragraphMetadata.Keys.Where(item => !paragraphs.Contains(item)).ToList())
+            _paragraphMetadata.Remove(paragraph);
+
+        var images = _editor.Document.Blocks.OfType<BlockUIContainer>().ToHashSet();
+        foreach (var image in _imageMetadata.Keys.Where(item => !images.Contains(item)).ToList())
+            _imageMetadata.Remove(image);
     }
 
     private void RaiseChanged()
@@ -579,27 +744,23 @@ public sealed class MarkdownBlockEditor : Border
         if (!_loading) ContentChanged?.Invoke(this, EventArgs.Empty);
     }
 
-    private sealed class EditorBlock
+    private sealed class ParagraphMetadata
     {
-        public EditorBlock(MarkdownLine line)
+        public ParagraphMetadata(MarkdownLineKind kind, bool isChecked, int indent)
         {
-            Kind = line.Kind;
-            IsChecked = line.IsChecked;
-            Indent = line.Indent;
-            ImagePath = line.ImagePath;
-            Editor = null!;
-            Host = null!;
-            Marker = null;
+            Kind = kind;
+            IsChecked = isChecked;
+            Indent = indent;
         }
 
         public MarkdownLineKind Kind { get; set; }
         public bool IsChecked { get; set; }
-        public int Indent { get; }
-        public string? ImagePath { get; }
-        public TextBox Editor { get; set; }
-        public UIElement Host { get; set; }
-        public UIElement? Marker { get; set; }
-
-        public MarkdownLine ToMarkdownLine() => new(Kind, Editor.Text, IsChecked, Indent, ImagePath);
+        public int Indent { get; set; }
     }
+
+    private sealed record ImageMetadata(string AltText, string RelativePath);
+
+    private sealed record SourceLine(Block Block, MarkdownLine Line, string SourceText, int Start);
+
+    private sealed record SourceDocument(IReadOnlyList<SourceLine> Lines, string Text);
 }

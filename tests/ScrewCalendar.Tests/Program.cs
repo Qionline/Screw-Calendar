@@ -5,6 +5,10 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Threading;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Documents;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Xml.Linq;
@@ -138,6 +142,7 @@ static void TestNormalEditorFormattingToolbar()
                 Brushes.Blue,
                 new FontFamily("Segoe UI"),
                 _ => null);
+            True(editor.Child is RichTextBox, "Markdown editor uses one native RichTextBox selection host");
             editor.SetMarkdown("Toolbar test");
             editor.ApplyKind(MarkdownLineKind.Heading1);
             editor.ApplyKind(MarkdownLineKind.Heading2);
@@ -145,6 +150,35 @@ static void TestNormalEditorFormattingToolbar()
             editor.ApplyKind(MarkdownLineKind.Bullet);
             editor.ApplyKind(MarkdownLineKind.Task);
             True(editor.GetMarkdown().StartsWith("- [ ] Toolbar test", StringComparison.Ordinal), "Toolbar updates the active visual block without reparenting errors");
+
+            editor.SetMarkdown("First\nSecond\nThird");
+            var richTextBox = (RichTextBox)editor.Child!;
+            var paragraphs = richTextBox.Document.Blocks.OfType<Paragraph>().ToList();
+            richTextBox.Selection.Select(paragraphs[0].ContentStart, paragraphs[^1].ContentEnd);
+            editor.ApplyKind(MarkdownLineKind.Task);
+            Equal(string.Join(Environment.NewLine, new[] { "- [ ] First", "- [ ] Second", "- [ ] Third" }), editor.GetMarkdown(), "Native selection formats every selected paragraph");
+
+            editor.SetMarkdown("- [ ] First\n- [x] Second\n- Plain");
+            richTextBox = (RichTextBox)editor.Child!;
+            paragraphs = richTextBox.Document.Blocks.OfType<Paragraph>().ToList();
+            var originalClipboard = Clipboard.GetDataObject();
+            try
+            {
+                richTextBox.Selection.Select(paragraphs[0].ContentStart, paragraphs[^1].ContentEnd);
+                ApplicationCommands.Copy.Execute(null, richTextBox);
+                Equal(string.Join(Environment.NewLine, new[] { "- [ ] First", "- [x] Second", "- Plain" }), Clipboard.GetText(), "Copy exports selected Markdown syntax");
+
+                var pasted = new MarkdownBlockEditor(Brushes.Black, Brushes.Gray, Brushes.White, Brushes.LightGray, Brushes.Blue, new FontFamily("Segoe UI"), _ => null);
+                pasted.SetMarkdown(string.Empty);
+                pasted.FocusEditor();
+                ApplicationCommands.Paste.Execute(null, (RichTextBox)pasted.Child!);
+                Equal(string.Join(Environment.NewLine, new[] { "- [ ] First", "- [x] Second", "- Plain" }), pasted.GetMarkdown(), "Paste restores Markdown block kinds");
+            }
+            finally
+            {
+                if (originalClipboard is not null) Clipboard.SetDataObject(originalClipboard);
+            }
+
             editor.AddImage("assets/test.png", "test");
             True(editor.GetMarkdown().Contains("![test](assets/test.png)", StringComparison.Ordinal), "Visual editor inserts an archived image block");
             editor.FocusEditor();
