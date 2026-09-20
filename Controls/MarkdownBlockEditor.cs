@@ -57,9 +57,7 @@ public sealed class MarkdownBlockEditor : Border
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled
         };
         PreviewMouseLeftButtonDown += FocusEditorFromBlankArea;
-        AddHandler(UIElement.PreviewMouseLeftButtonDownEvent, new MouseButtonEventHandler(TrackSelectionAnchor), true);
         AddHandler(UIElement.PreviewMouseMoveEvent, new MouseEventHandler(ExtendSelectionAcrossBlocks), true);
-        AddHandler(UIElement.PreviewMouseLeftButtonUpEvent, new MouseButtonEventHandler(FinishSelectionAcrossBlocks), true);
         DataObject.AddPastingHandler(this, HandleCrossBlockPaste);
     }
 
@@ -146,7 +144,7 @@ public sealed class MarkdownBlockEditor : Border
     private void TrackSelectionAnchor(object sender, MouseButtonEventArgs eventArgs)
     {
         if (eventArgs.ChangedButton != MouseButton.Left) return;
-        var editor = FindEditor(eventArgs.OriginalSource as DependencyObject);
+        var editor = FindEditor(eventArgs.OriginalSource as DependencyObject) ?? eventArgs.Source as TextBox;
         if (editor is null)
         {
             _selectionAnchorEditor = null;
@@ -162,7 +160,9 @@ public sealed class MarkdownBlockEditor : Border
     private void ExtendSelectionAcrossBlocks(object sender, MouseEventArgs eventArgs)
     {
         if (_selectionAnchorEditor is null || Mouse.LeftButton != MouseButtonState.Pressed) return;
-        var target = FindEditor(eventArgs.OriginalSource as DependencyObject) ?? FindEditor(Mouse.DirectlyOver as DependencyObject);
+        var target = FindEditor(eventArgs.OriginalSource as DependencyObject)
+            ?? eventArgs.Source as TextBox
+            ?? FindEditor(Mouse.DirectlyOver as DependencyObject);
         if (target is null || (ReferenceEquals(target, _selectionAnchorEditor) && !_dragSelectingAcrossBlocks)) return;
 
         if (!_dragSelectingAcrossBlocks)
@@ -178,7 +178,9 @@ public sealed class MarkdownBlockEditor : Border
     private void FinishSelectionAcrossBlocks(object sender, MouseButtonEventArgs eventArgs)
     {
         if (!_dragSelectingAcrossBlocks || eventArgs.ChangedButton != MouseButton.Left) return;
-        var target = FindEditor(eventArgs.OriginalSource as DependencyObject) ?? FindEditor(Mouse.DirectlyOver as DependencyObject);
+        var target = FindEditor(eventArgs.OriginalSource as DependencyObject)
+            ?? eventArgs.Source as TextBox
+            ?? FindEditor(Mouse.DirectlyOver as DependencyObject);
         if (target is not null)
             ApplyBlockSelection(_selectionAnchorEditor!, _selectionAnchorOffset, target, CharacterIndex(target, eventArgs.GetPosition(target)));
         ReleaseMouseCapture();
@@ -410,6 +412,9 @@ public sealed class MarkdownBlockEditor : Border
             TextWrapping = TextWrapping.Wrap,
             AcceptsReturn = false
         };
+        block.Editor.AddHandler(UIElement.PreviewMouseLeftButtonDownEvent, new MouseButtonEventHandler(TrackSelectionAnchor), true);
+        block.Editor.AddHandler(UIElement.PreviewMouseMoveEvent, new MouseEventHandler(ExtendSelectionAcrossBlocks), true);
+        block.Editor.AddHandler(UIElement.PreviewMouseLeftButtonUpEvent, new MouseButtonEventHandler(FinishSelectionAcrossBlocks), true);
         block.Editor.IsInactiveSelectionHighlightEnabled = true;
         block.Editor.SelectionBrush = _accent;
         block.Editor.SelectionOpacity = .35;
