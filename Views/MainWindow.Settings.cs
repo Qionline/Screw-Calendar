@@ -39,9 +39,10 @@ public sealed partial class MainWindow
         Grid.SetColumn(headerTitle, 0); header.Children.Add(headerTitle);
         var close = DialogCloseButton(dialog, 34, 22, 5, InputBackground());
         Grid.SetColumn(close, 1); header.Children.Add(close);
+        AddSettingsSectionHeader(root, "settings.sectionLayout", true);
         var rowsLine = SettingValueLine(Localization.T("settings.rowsLabel"), Localization.T("settings.rowsValue", _state.Rows), out var rowsValue);
         root.Children.Add(rowsLine);
-        var rows = SettingsSlider(CalendarLayout.MinimumRows, CalendarLayout.MaximumRows, _state.Rows, 1, new Thickness(0, 8, 0, 11));
+        var rows = SettingsSlider(CalendarLayout.MinimumRows, CalendarLayout.MaximumRows, _state.Rows, 1, new Thickness(0, 8, 0, 14));
         rows.ValueChanged += (_, _) => { _state.Rows = (int)Math.Round(rows.Value); rowsValue.Text = Localization.T("settings.rowsValue", _state.Rows); SaveAndRender(); };
         root.Children.Add(rows);
 
@@ -50,7 +51,6 @@ public sealed partial class MainWindow
             Localization.T("settings.calendarSizeLabel"),
             Localization.T("settings.calendarSizeValue", (int)Math.Round(calendarScale * 100)),
             out var calendarSizeValue);
-        calendarSizeLine.Margin = new Thickness(0, 2, 0, 0);
         root.Children.Add(calendarSizeLine);
         var calendarSizeSlider = SettingsSlider(
             CalendarLayout.CalendarScaleMinimum,
@@ -65,31 +65,14 @@ public sealed partial class MainWindow
             calendarSizeValue.Text = Localization.T("settings.calendarSizeValue", (int)Math.Round(actualScale * 100));
         };
         root.Children.Add(calendarSizeSlider);
-        var calendarSizeHint = Text(Localization.T("settings.calendarSizeHint"), 12, Muted(), new Thickness(0, 0, 0, 11));
+        var calendarSizeHint = Text(Localization.T("settings.calendarSizeHint"), 12, Muted(), new Thickness(0, 0, 0, 5));
         calendarSizeHint.TextWrapping = TextWrapping.Wrap;
         root.Children.Add(calendarSizeHint);
 
-        var styleHint = Text(Localization.T("settings.styleHint"), 12, Muted(), new Thickness(0, 0, 0, 17)); styleHint.TextWrapping = TextWrapping.Wrap; root.Children.Add(styleHint);
-
-        root.Children.Add(Text(Localization.T("settings.appearance"), 14, Foreground(), new Thickness(0, 0, 0, 8)));
-        var appearance = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 3) };
-        var light = SettingsRadio(Localization.T("settings.light"), "appearance", CalendarTheme.Light);
-        var dark = SettingsRadio(Localization.T("settings.dark"), "appearance", CalendarTheme.Dark);
-        light.IsChecked = _state.Theme == CalendarTheme.Light;
-        dark.IsChecked = _state.Theme == CalendarTheme.Dark;
-        void SelectTheme(CalendarTheme selected)
-        {
-            if (_state.Theme == selected) return;
-            _state.Theme = selected;
-            SaveAndRender();
-        }
-        light.Checked += (_, _) => SelectTheme(CalendarTheme.Light);
-        dark.Checked += (_, _) => SelectTheme(CalendarTheme.Dark);
-        appearance.Children.Add(light); appearance.Children.Add(dark); root.Children.Add(appearance);
-
         TextBlock opacityValue = null!;
         Slider opacity = null!;
-        root.Children.Add(Text(Localization.T("settings.calendarStyle"), 14, Foreground(), new Thickness(0, 15, 0, 8)));
+        AddSettingsSectionHeader(root, "settings.sectionAppearance");
+        root.Children.Add(SettingsSubheading("settings.calendarStyle"));
         var style = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 3) };
         var windowsStyle = SettingsRadio(Localization.T("style.windows"), "calendarStyle", CalendarStyle.Windows);
         var minimalStyle = SettingsRadio(Localization.T("style.minimal"), "calendarStyle", CalendarStyle.Minimal);
@@ -110,18 +93,35 @@ public sealed partial class MainWindow
         minimalStyle.Checked += (_, _) => SelectStyle(CalendarStyle.Minimal);
         widgetStyle.Checked += (_, _) => SelectStyle(CalendarStyle.Widget);
         style.Children.Add(windowsStyle); style.Children.Add(minimalStyle); style.Children.Add(widgetStyle); root.Children.Add(style);
+        var styleHint = Text(Localization.T("settings.styleHint"), 12, Muted(), new Thickness(0, 0, 0, 14));
+        styleHint.TextWrapping = TextWrapping.Wrap;
+        root.Children.Add(styleHint);
+
+        root.Children.Add(SettingsSubheading("settings.themeMode"));
+        var appearance = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 13) };
+        var light = SettingsRadio(Localization.T("settings.light"), "appearance", CalendarTheme.Light);
+        var dark = SettingsRadio(Localization.T("settings.dark"), "appearance", CalendarTheme.Dark);
+        light.IsChecked = _state.Theme == CalendarTheme.Light;
+        dark.IsChecked = _state.Theme == CalendarTheme.Dark;
+        void SelectTheme(CalendarTheme selected)
+        {
+            if (_state.Theme == selected) return;
+            _state.Theme = selected;
+            SaveAndRender();
+        }
+        light.Checked += (_, _) => SelectTheme(CalendarTheme.Light);
+        dark.Checked += (_, _) => SelectTheme(CalendarTheme.Dark);
+        appearance.Children.Add(light); appearance.Children.Add(dark); root.Children.Add(appearance);
 
         var opacityLine = SettingValueLine(Localization.T("settings.opacityLabel"), Localization.T("settings.opacityValue", (int)Math.Round(_state.Opacity * 100)), out opacityValue);
-        opacityLine.Margin = new Thickness(0, 15, 0, 0); root.Children.Add(opacityLine);
-        opacity = SettingsSlider(.4, 1, _state.Opacity, .05, new Thickness(0, 8, 0, 18));
+        root.Children.Add(opacityLine);
+        opacity = SettingsSlider(.4, 1, _state.Opacity, .05, new Thickness(0, 8, 0, 5));
         opacity.ValueChanged += (_, _) => { _state.Opacity = opacity.Value; opacityValue.Text = Localization.T("settings.opacityValue", (int)Math.Round(_state.Opacity * 100)); SaveAndRender(); };
         root.Children.Add(opacity);
 
-        root.Children.Add(SettingsDivider());
-        root.Children.Add(Text(Localization.T("settings.sectionBehavior"), 15, FontWeights.SemiBold, Foreground(), new Thickness(0, 17, 0, 12)));
-        var themeColorText = Text(Localization.T("settings.themeColor", ThemeColorName()), 14, Foreground());
+        var themeColorText = Text(Localization.T("settings.themeColor", ThemeColorName()), 14, Foreground(), new Thickness(0, 3, 0, 8));
         root.Children.Add(themeColorText);
-        var themeColors = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(-2, 9, 0, 14) };
+        var themeColors = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(-2, 0, 0, 12) };
         var themeChoices = new List<(Grid Host, Ellipse Selection)>();
         foreach (var themeColor in Enum.GetValues<CalendarThemeColor>())
         {
@@ -131,16 +131,9 @@ public sealed partial class MainWindow
             themeColors.Children.Add(choice.Host);
         }
         root.Children.Add(themeColors);
-        var locked = StyledCheckBox(Localization.T("settings.locked"), _state.Locked, new Thickness(0, 2, 0, 11));
-        locked.Checked += (_, _) => SetLocked(true); locked.Unchecked += (_, _) => SetLocked(false); root.Children.Add(locked);
-        var topmost = StyledCheckBox(Localization.T("settings.topmost"), _state.Topmost, new Thickness(0, 0, 0, 11));
-        topmost.Checked += (_, _) => SetTopmost(true); topmost.Unchecked += (_, _) => SetTopmost(false); root.Children.Add(topmost);
-        var topmostHint = Text(Localization.T("settings.topmostHint"), 12, Muted(), new Thickness(0, -5, 0, 11));
-        topmostHint.TextWrapping = TextWrapping.Wrap;
-        root.Children.Add(topmostHint);
-        var startup = StyledCheckBox(Localization.T("settings.startup"), _state.StartWithWindows, new Thickness(0, 0, 0, 4));
-        startup.Checked += (_, _) => SetStartupEnabled(true); startup.Unchecked += (_, _) => SetStartupEnabled(false); root.Children.Add(startup);
-        var todoPanel = StyledCheckBox(Localization.T("settings.todoPanel"), _state.ShowTodoPanel, new Thickness(0, 7, 0, 4));
+
+        AddSettingsSectionHeader(root, "settings.sectionTodo");
+        var todoPanel = StyledCheckBox(Localization.T("settings.todoPanel"), _state.ShowTodoPanel, new Thickness(0, 0, 0, 9));
         void SetTodoPanelVisible(bool visible)
         {
             if (_state.ShowTodoPanel == visible) return;
@@ -157,7 +150,6 @@ public sealed partial class MainWindow
             Localization.T("settings.todoSizeLabel"),
             Localization.T("settings.todoSizeValue", (int)Math.Round(_state.TodoPanelHeight)),
             out var todoSizeValue);
-        todoSizeLine.Margin = new Thickness(0, 2, 0, 0);
         root.Children.Add(todoSizeLine);
         var todoSizeSlider = SettingsSlider(
             CalendarLayout.TodoPanelMinHeight,
@@ -174,12 +166,22 @@ public sealed partial class MainWindow
             SaveGeometry();
         };
         root.Children.Add(todoSizeSlider);
-        var todoSizeHint = Text(Localization.T("settings.todoSizeHint"), 12, Muted(), new Thickness(0, 0, 0, 11));
+        var todoSizeHint = Text(Localization.T("settings.todoSizeHint"), 12, Muted(), new Thickness(0, 0, 0, 5));
         todoSizeHint.TextWrapping = TextWrapping.Wrap;
         root.Children.Add(todoSizeHint);
 
-        root.Children.Add(SettingsDivider());
-        root.Children.Add(Text(Localization.T("settings.sectionLanguage"), 15, FontWeights.SemiBold, Foreground(), new Thickness(0, 17, 0, 8)));
+        AddSettingsSectionHeader(root, "settings.sectionWindow");
+        var locked = StyledCheckBox(Localization.T("settings.locked"), _state.Locked, new Thickness(0, 0, 0, 11));
+        locked.Checked += (_, _) => SetLocked(true); locked.Unchecked += (_, _) => SetLocked(false); root.Children.Add(locked);
+        var topmost = StyledCheckBox(Localization.T("settings.topmost"), _state.Topmost, new Thickness(0, 0, 0, 11));
+        topmost.Checked += (_, _) => SetTopmost(true); topmost.Unchecked += (_, _) => SetTopmost(false); root.Children.Add(topmost);
+        var topmostHint = Text(Localization.T("settings.topmostHint"), 12, Muted(), new Thickness(0, -5, 0, 11));
+        topmostHint.TextWrapping = TextWrapping.Wrap;
+        root.Children.Add(topmostHint);
+        var startup = StyledCheckBox(Localization.T("settings.startup"), _state.StartWithWindows, new Thickness(0, 0, 0, 4));
+        startup.Checked += (_, _) => SetStartupEnabled(true); startup.Unchecked += (_, _) => SetStartupEnabled(false); root.Children.Add(startup);
+
+        AddSettingsSectionHeader(root, "settings.sectionLanguage");
         var language = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 3) };
         var chinese = SettingsRadio(Localization.T("language.chinese"), "language", CalendarLanguage.ChineseSimplified);
         var english = SettingsRadio(Localization.T("language.english"), "language", CalendarLanguage.English);
@@ -198,8 +200,7 @@ public sealed partial class MainWindow
         english.Checked += (_, _) => SelectLanguage(CalendarLanguage.English);
         language.Children.Add(chinese); language.Children.Add(english); root.Children.Add(language);
 
-        root.Children.Add(SettingsDivider());
-        root.Children.Add(Text(Localization.T("settings.sectionData"), 15, FontWeights.SemiBold, Foreground(), new Thickness(0, 17, 0, 8)));
+        AddSettingsSectionHeader(root, "settings.sectionData");
         var portableHint = Text(Localization.T("settings.portable"), 12, Muted(), new Thickness(0, 0, 0, 12)); portableHint.TextWrapping = TextWrapping.Wrap; root.Children.Add(portableHint);
         var export = Button(Localization.T("settings.export"), Localization.T("settings.exportTooltip"), 100); export.Height = 36; export.Click += (_, _) => ExportJson();
         var import = Button(Localization.T("settings.import"), Localization.T("settings.importTooltip"), 100); import.Height = 36; import.Margin = new Thickness(7, 2, 0, 0); import.Click += (_, _) => ImportJson();
@@ -218,6 +219,20 @@ public sealed partial class MainWindow
         dialog.Content = DialogSurface(layout, SettingsDialogPadding());
         dialog.Show();
     }
+
+    private void AddSettingsSectionHeader(StackPanel root, string key, bool first = false)
+    {
+        if (!first) root.Children.Add(SettingsDivider());
+        root.Children.Add(Text(
+            Localization.T(key),
+            15,
+            FontWeights.SemiBold,
+            Foreground(),
+            new Thickness(0, first ? 0 : 17, 0, 10)));
+    }
+
+    private TextBlock SettingsSubheading(string key) =>
+        Text(Localization.T(key), 14, FontWeights.SemiBold, Foreground(), new Thickness(0, 0, 0, 8));
 
     private CheckBox StyledCheckBox(string label, bool isChecked, Thickness margin) => new()
     {
