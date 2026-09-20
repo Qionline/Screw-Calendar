@@ -5,7 +5,7 @@ namespace ScrewCalendar;
 
 public enum CalendarStyle { Windows, Minimal, Widget }
 public enum CalendarTheme { Light, Dark }
-public enum CalendarThemeColor { Blue, Teal, Purple, Orange }
+public enum CalendarThemeColor { Blue, Teal, Purple, Orange, Gray, Red }
 public enum CalendarLanguage { ChineseSimplified, English }
 
 public sealed class CalendarState

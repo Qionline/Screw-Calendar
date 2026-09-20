@@ -303,7 +303,11 @@ public sealed partial class MainWindow
         {
             _todayMarkdownPreview = updated;
             _todayMarkdownPreviewSink?.Invoke(updated);
-            RenderTodoPanel();
+            Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.DataBind, new Action(() =>
+            {
+                if (string.Equals(_todayMarkdownPreview, updated, StringComparison.Ordinal))
+                    RenderTodoPanel();
+            }));
             return;
         }
         SetMarkdownDocument(date, permanent, updated);

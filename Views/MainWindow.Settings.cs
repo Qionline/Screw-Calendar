@@ -119,15 +119,13 @@ public sealed partial class MainWindow
         opacity.ValueChanged += (_, _) => { _state.Opacity = opacity.Value; opacityValue.Text = Localization.T("settings.opacityValue", (int)Math.Round(_state.Opacity * 100)); SaveAndRender(); };
         root.Children.Add(opacity);
 
-        var themeColorText = Text(Localization.T("settings.themeColor", ThemeColorName()), 14, Foreground(), new Thickness(0, 3, 0, 8));
-        root.Children.Add(themeColorText);
-        var themeColors = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(-2, 0, 0, 12) };
+        var themeColors = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(-2, 3, 0, 12) };
         var themeChoices = new List<(Grid Host, Ellipse Selection)>();
         foreach (var themeColor in Enum.GetValues<CalendarThemeColor>())
         {
             var choice = ColorChoice(themeColor, ThemeColorName(themeColor), ThemeColorBrush(themeColor), themeColor == _state.ThemeColor);
             themeChoices.Add(choice);
-            choice.Host.MouseLeftButtonDown += (_, _) => { _state.ThemeColor = themeColor; themeColorText.Text = Localization.T("settings.themeColor", ThemeColorName()); RefreshChoiceSelections(themeChoices, _state.ThemeColor); SaveAndRender(); };
+            choice.Host.MouseLeftButtonDown += (_, _) => { _state.ThemeColor = themeColor; RefreshChoiceSelections(themeChoices, _state.ThemeColor); SaveAndRender(); };
             themeColors.Children.Add(choice.Host);
         }
         root.Children.Add(themeColors);
@@ -171,6 +169,8 @@ public sealed partial class MainWindow
         root.Children.Add(todoSizeHint);
 
         AddSettingsSectionHeader(root, "settings.sectionWindow");
+        var startup = StyledCheckBox(Localization.T("settings.startup"), _state.StartWithWindows, new Thickness(0, 0, 0, 11));
+        startup.Checked += (_, _) => SetStartupEnabled(true); startup.Unchecked += (_, _) => SetStartupEnabled(false); root.Children.Add(startup);
         var locked = StyledCheckBox(Localization.T("settings.locked"), _state.Locked, new Thickness(0, 0, 0, 11));
         locked.Checked += (_, _) => SetLocked(true); locked.Unchecked += (_, _) => SetLocked(false); root.Children.Add(locked);
         var topmost = StyledCheckBox(Localization.T("settings.topmost"), _state.Topmost, new Thickness(0, 0, 0, 11));
@@ -178,8 +178,6 @@ public sealed partial class MainWindow
         var topmostHint = Text(Localization.T("settings.topmostHint"), 12, Muted(), new Thickness(0, -5, 0, 11));
         topmostHint.TextWrapping = TextWrapping.Wrap;
         root.Children.Add(topmostHint);
-        var startup = StyledCheckBox(Localization.T("settings.startup"), _state.StartWithWindows, new Thickness(0, 0, 0, 4));
-        startup.Checked += (_, _) => SetStartupEnabled(true); startup.Unchecked += (_, _) => SetStartupEnabled(false); root.Children.Add(startup);
 
         AddSettingsSectionHeader(root, "settings.sectionLanguage");
         var language = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 3) };

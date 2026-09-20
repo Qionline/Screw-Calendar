@@ -43,6 +43,7 @@ public sealed partial class MainWindow : Window
     private readonly Viewbox _calendarViewbox;
     private readonly RowDefinition _calendarRow;
     private readonly RowDefinition _todoRow;
+    private readonly Dictionary<string, Border> _dateCells = new(StringComparer.Ordinal);
     private Border _todoPanel = null!;
     private Border _todoResizeGrip = null!;
     private Viewbox _calendarLogo = null!;
@@ -285,6 +286,7 @@ public sealed partial class MainWindow : Window
         _currentWeekText.Text = WeekdayName(CalendarMath.MondayColumn(_today));
         _viewMonthText.Text = FormatMonth(_anchor);
         _styleButton.Content = StyleName();
+        _dateCells.Clear();
         _datesGrid.Children.Clear();
         _datesGrid.RowDefinitions.Clear();
         var rows = CalendarMath.BuildRows(_anchor, _state.Rows, _home);
@@ -326,7 +328,11 @@ public sealed partial class MainWindow : Window
             }
             foreach (var date in row.Dates.Select((d, i) => (d, i)))
             {
-                var cell = date.d.HasValue ? BuildDateCell(date.d.Value) : new Border { Width = CalendarLayout.CellWidth, Background = Brushes.Transparent, Margin = new Thickness(CalendarLayout.CellMargin) };
+                var cell = date.d.HasValue
+                    ? BuildDateCell(date.d.Value)
+                    : new Border { Width = CalendarLayout.CellWidth, Background = Brushes.Transparent, Margin = new Thickness(CalendarLayout.CellMargin) };
+                if (date.d is DateTime dateValue)
+                    _dateCells[CalendarMath.Key(dateValue)] = cell;
                 Grid.SetColumn(cell, date.i);
                 Grid.SetRow(cell, dateRow);
                 cells.Children.Add(cell);
@@ -639,12 +645,13 @@ public sealed partial class MainWindow : Window
             holder.Width = CalendarLayout.GridWidth;
     }
     private string StyleName() => _state.Style switch { CalendarStyle.Windows => Localization.T("style.windows"), CalendarStyle.Minimal => Localization.T("style.minimal"), _ => Localization.T("style.widget") };
-    private string ThemeColorName() => ThemeColorName(_state.ThemeColor);
     private static string ThemeColorName(CalendarThemeColor color) => color switch
     {
         CalendarThemeColor.Teal => Localization.T("color.teal"),
         CalendarThemeColor.Purple => Localization.T("color.purple"),
         CalendarThemeColor.Orange => Localization.T("color.orange"),
+        CalendarThemeColor.Gray => Localization.T("color.gray"),
+        CalendarThemeColor.Red => Localization.T("color.red"),
         _ => Localization.T("color.blue")
     };
     private Brush ThemeColorBrush(CalendarThemeColor color) => new SolidColorBrush(AccentColor(color));
@@ -682,6 +689,8 @@ public sealed partial class MainWindow : Window
             CalendarThemeColor.Teal => dark ? Color.FromRgb(100, 214, 196) : Color.FromRgb(0, 128, 116),
             CalendarThemeColor.Purple => dark ? Color.FromRgb(201, 169, 255) : Color.FromRgb(106, 69, 184),
             CalendarThemeColor.Orange => dark ? Color.FromRgb(255, 187, 115) : Color.FromRgb(184, 92, 0),
+            CalendarThemeColor.Gray => dark ? Color.FromRgb(186, 196, 210) : Color.FromRgb(95, 107, 122),
+            CalendarThemeColor.Red => dark ? Color.FromRgb(255, 137, 145) : Color.FromRgb(194, 65, 75),
             _ => dark ? Color.FromRgb(117, 186, 255) : Color.FromRgb(0, 103, 192)
         };
     }
