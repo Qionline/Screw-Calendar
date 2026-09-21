@@ -8,6 +8,8 @@ namespace ScrewCalendar;
 // Window geometry, resizing, locking, topmost and startup behavior.
 public sealed partial class MainWindow
 {
+    private const string StartupValueName = "ScrewCalendar";
+
     private void RestoreGeometry()
     {
         WindowPlacementService.Restore(this, _state.Geometry);
@@ -76,12 +78,18 @@ public sealed partial class MainWindow
     {
         _windowLayerController.SetAlwaysOnTop(_state.Topmost);
     }
-    private void SetStartupEnabled(bool enabled)
+    private bool SetStartupEnabled(bool enabled)
     {
+        if (!StartupRegistration.SetEnabled(StartupValueName, enabled, logError: AppLogger.Error))
+        {
+            AppLogger.Error($"Could not {(enabled ? "enable" : "disable")} Windows startup registration.");
+            return false;
+        }
+
         _state.StartWithWindows = enabled;
-        StartupRegistration.SetEnabled("ScrewCalendar", enabled, logError: AppLogger.Error);
         SaveState();
         CreateTray();
+        return true;
     }
 
     private void ResizeWindowToDesign()

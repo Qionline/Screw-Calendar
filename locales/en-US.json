@@ -49,6 +49,7 @@
   "settings.topmost": "Always on top",
   "settings.topmostHint": "On: stay above normal windows. Off: stay below them. Full-screen windows can always cover the calendar.",
   "settings.startup": "Start with Windows",
+  "settings.startupError": "Unable to update the startup setting. Check the log for details.",
   "settings.todoPanel": "Show bottom Markdown todos",
   "settings.todoSizeLabel": "Todo height",
   "settings.todoSizeValue": "{0} px",

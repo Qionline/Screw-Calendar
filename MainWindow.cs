@@ -91,6 +91,7 @@ public sealed partial class MainWindow : Window
             if (!Dispatcher.HasShutdownStarted) Dispatcher.BeginInvoke(Render);
         };
         _state = _dataStore.Load();
+        StartupRegistration.SetEnabled(StartupValueName, _state.StartWithWindows, logError: AppLogger.Error);
         _windowLayerController = new WindowLayerController(this, allowFullscreenCover: true);
         _windowLayerController.SetAlwaysOnTop(_state.Topmost);
         Localization.SetLanguage(_state.Language);

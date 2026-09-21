@@ -170,7 +170,18 @@ public sealed partial class MainWindow
 
         AddSettingsSectionHeader(root, "settings.sectionWindow");
         var startup = StyledCheckBox(Localization.T("settings.startup"), _state.StartWithWindows, new Thickness(0, 0, 0, 11));
-        startup.Checked += (_, _) => SetStartupEnabled(true); startup.Unchecked += (_, _) => SetStartupEnabled(false); root.Children.Add(startup);
+        var changingStartup = false;
+        void SetStartupFromSettings(bool enabled)
+        {
+            if (changingStartup || SetStartupEnabled(enabled)) return;
+            changingStartup = true;
+            startup.IsChecked = !enabled;
+            changingStartup = false;
+            MessageBox.Show(this, Localization.T("settings.startupError"), Localization.T("dialog.calendar"), MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+        startup.Checked += (_, _) => SetStartupFromSettings(true);
+        startup.Unchecked += (_, _) => SetStartupFromSettings(false);
+        root.Children.Add(startup);
         var locked = StyledCheckBox(Localization.T("settings.locked"), _state.Locked, new Thickness(0, 0, 0, 11));
         locked.Checked += (_, _) => SetLocked(true); locked.Unchecked += (_, _) => SetLocked(false); root.Children.Add(locked);
         var topmost = StyledCheckBox(Localization.T("settings.topmost"), _state.Topmost, new Thickness(0, 0, 0, 11));

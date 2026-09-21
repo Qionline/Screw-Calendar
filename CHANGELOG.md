@@ -6,6 +6,13 @@
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-09-21
+
+### Fixed
+
+- 修复开机启动项未写入、开发环境误注册 `dotnet.exe`，以及程序更新后启动路径失效的问题。
+- 开机启动注册失败时不再保存为已开启，并在程序启动时自动校准注册项。
+
 ## [1.0.1] - 2026-09-20
 
 ### Changed
@@ -49,7 +56,8 @@
 - 简体中文和英文界面。
 - 开源仓库规范、自动化回归测试、持续集成和版本发布流程。
 
-[Unreleased]: https://github.com/Qionline/Screw-Calendar/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/Qionline/Screw-Calendar/compare/v1.0.2...HEAD
+[1.0.2]: https://github.com/Qionline/Screw-Calendar/releases/tag/v1.0.2
 [1.0.1]: https://github.com/Qionline/Screw-Calendar/releases/tag/v1.0.1
 [1.0.0]: https://github.com/Qionline/Screw-Calendar/releases/tag/v1.0.0
 [0.1.0]: https://github.com/Qionline/Screw-Calendar/releases/tag/v0.1.0

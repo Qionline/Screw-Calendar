@@ -49,6 +49,7 @@
   "settings.topmost": "始终置顶",
   "settings.topmostHint": "开启后显示在普通窗口上方；关闭后固定在普通窗口下方。全屏窗口始终可以覆盖日历。",
   "settings.startup": "开机启动",
+  "settings.startupError": "无法更新开机启动设置，请查看日志。",
   "settings.todoPanel": "显示底部 Markdown 待办",
   "settings.todoSizeLabel": "待办高度",
   "settings.todoSizeValue": "{0} px",
