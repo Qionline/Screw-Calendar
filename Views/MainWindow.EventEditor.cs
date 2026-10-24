@@ -17,20 +17,14 @@ public sealed partial class MainWindow
     private void ShowMarkdownEditor(DateTime date, bool permanent, Point? ownerPosition = null)
     {
         var editorKey = permanent ? "permanent" : $"date:{CalendarMath.Key(date)}";
-        if (_markdownEditorDialogs.TryGetValue(editorKey, out var existingDialog) && existingDialog.IsVisible)
-        {
-            existingDialog.Activate();
-            return;
-        }
+        if (!_markdownEditors.TryPrepareToOpen(editorKey)) return;
 
         var existing = GetMarkdownDocument(date, permanent);
         var dialog = NewEventDialog(string.Empty, ownerPosition);
-        _markdownEditorDialogs[editorKey] = dialog;
         var previewsToday = !permanent && date.Date == _today.Date;
         dialog.Closed += (_, _) =>
         {
-            if (_markdownEditorDialogs.TryGetValue(editorKey, out var current) && ReferenceEquals(current, dialog))
-                _markdownEditorDialogs.Remove(editorKey);
+            _markdownEditors.Clear(editorKey);
             if (!previewsToday) return;
             _todayMarkdownPreview = null;
             _todayMarkdownPreviewSink = null;
@@ -61,9 +55,7 @@ public sealed partial class MainWindow
 
         var formats = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Left };
         AddFormatButton(formats, "T", Localization.T("markdown.paragraph"), MarkdownLineKind.Paragraph);
-        AddFormatButton(formats, "H1", Localization.T("markdown.heading1"), MarkdownLineKind.Heading1);
-        AddFormatButton(formats, "H2", Localization.T("markdown.heading2"), MarkdownLineKind.Heading2);
-        AddFormatButton(formats, "H3", Localization.T("markdown.heading3"), MarkdownLineKind.Heading3);
+        AddFormatButton(formats, "H", Localization.T("markdown.heading2"), MarkdownLineKind.Heading2);
         AddFormatButton(formats, "•", Localization.T("markdown.list"), MarkdownLineKind.Bullet);
         AddFormatButton(formats, "☑", Localization.T("markdown.task"), MarkdownLineKind.Task);
         Grid.SetColumn(formats, 0); toolbar.Children.Add(formats);
@@ -96,6 +88,25 @@ public sealed partial class MainWindow
         {
             normalEditor.SetMarkdown(markdown);
         }
+
+        bool SaveAndClose(string markdown)
+        {
+            var previous = GetMarkdownDocument(date, permanent);
+            SetMarkdownDocument(date, permanent, markdown);
+            if (!_dataStore.Save(_state))
+            {
+                SetMarkdownDocument(date, permanent, previous);
+                System.Windows.MessageBox.Show(dialog, Localization.T("markdown.saveError"), Localization.T("dialog.calendar"), MessageBoxButton.OK, MessageBoxImage.Warning);
+                dialog.Activate();
+                return false;
+            }
+
+            dialog.Close();
+            Render();
+            return true;
+        }
+
+        bool SaveDraftAndClose() => SaveAndClose(normalEditor.GetMarkdown().Trim());
 
         void InsertStoredImage(string path, string altText)
         {
@@ -156,11 +167,7 @@ public sealed partial class MainWindow
             clear.HorizontalAlignment = HorizontalAlignment.Left; clear.HorizontalContentAlignment = HorizontalAlignment.Left;
             clear.Foreground = WorkBrush(); clear.Background = Brushes.Transparent; clear.BorderBrush = Brushes.Transparent;
             clear.BorderThickness = new Thickness(0); clear.Template = RoundedButtonTemplate(true);
-            clear.Click += (_, _) =>
-            {
-                SetMarkdownDocument(date, permanent, string.Empty);
-                SaveState(); dialog.Close(); Render();
-            };
+            clear.Click += (_, _) => SaveAndClose(string.Empty);
             actions.Children.Add(clear);
         }
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
@@ -168,17 +175,13 @@ public sealed partial class MainWindow
         cancel.Height = 38; cancel.Background = InputBackground(); cancel.Click += (_, _) => dialog.Close();
         var save = Button(Localization.T("markdown.save"), Localization.T("markdown.saveTooltip"), 90);
         save.Height = 38; save.Margin = new Thickness(8, 2, 0, 0); save.Background = Accent(); save.Foreground = Brushes.White; save.BorderBrush = Accent();
-        save.Click += (_, _) =>
-        {
-            var markdown = normalEditor.GetMarkdown().Trim();
-            SetMarkdownDocument(date, permanent, markdown);
-            SaveState(); dialog.Close(); Render();
-        };
+        save.Click += (_, _) => SaveDraftAndClose();
         buttons.Children.Add(cancel); buttons.Children.Add(save);
         Grid.SetColumn(buttons, 1); actions.Children.Add(buttons);
         Grid.SetRow(actions, 2); root.Children.Add(actions);
 
         dialog.Content = DialogSurface(root, DialogPadding());
+        _markdownEditors.Register(editorKey, () => dialog.Activate(), SaveDraftAndClose);
         dialog.Show();
     }
 

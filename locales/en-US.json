@@ -102,6 +102,7 @@
   "markdown.clearTooltip": "Delete this Markdown document",
   "markdown.save": "Save",
   "markdown.saveTooltip": "Save Markdown locally",
+  "markdown.saveError": "Unable to save the todo. The editor remains open. Check the log and try again.",
   "holiday.newYear": "New Year's Day",
   "holiday.springFestival": "Spring Festival",
   "holiday.tombSweeping": "Tomb-Sweeping Day",

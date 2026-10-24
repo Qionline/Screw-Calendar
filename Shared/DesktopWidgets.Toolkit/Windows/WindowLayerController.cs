@@ -14,8 +14,11 @@ namespace DesktopWidgets.Toolkit.Windows;
 public sealed class WindowLayerController : IDisposable
 {
     private const int GwlExStyle = -20;
+    private const long WsExToolWindow = 0x00000080L;
+    private const long WsExAppWindow = 0x00040000L;
     private const long WsExNoActivate = 0x08000000L;
     private const int WmSysCommand = 0x0112;
+    private const int WmWindowPosChanged = 0x0047;
     private const int ScMinimize = 0xF020;
     private const uint GwHwndPrev = 3;
     private const uint SwpNoSize = 0x0001;
@@ -25,6 +28,7 @@ public sealed class WindowLayerController : IDisposable
     private const uint SwpFrameChanged = 0x0020;
     private const uint SwpShowWindow = 0x0040;
     private const uint EventSystemForeground = 0x0003;
+    private const uint EventObjectReorder = 0x8004;
     private const uint WineventOutOfContext = 0x0000;
     private const uint MonitorDefaultToNearest = 0x00000002;
 
@@ -33,6 +37,7 @@ public sealed class WindowLayerController : IDisposable
     private readonly WinEventDelegate _foregroundChangedCallback;
     private HwndSource? _source;
     private IntPtr _foregroundHook;
+    private IntPtr _desktopReorderHook;
     private bool _alwaysOnTop;
     private bool _interactive;
     private bool _fullscreenForeground;
@@ -84,9 +89,12 @@ public sealed class WindowLayerController : IDisposable
     {
         _source = HwndSource.FromHwnd(new WindowInteropHelper(_window).Handle);
         _source?.AddHook(WindowProc);
-        if (_allowFullscreenCover)
-            _foregroundHook = SetWinEventHook(EventSystemForeground, EventSystemForeground, IntPtr.Zero,
-                _foregroundChangedCallback, 0, 0, WineventOutOfContext);
+        // Desktop mode needs foreground notifications too: Show Desktop raises
+        // the shell above non-minimizable windows without minimizing them.
+        _foregroundHook = SetWinEventHook(EventSystemForeground, EventSystemForeground, IntPtr.Zero,
+            _foregroundChangedCallback, 0, 0, WineventOutOfContext);
+        _desktopReorderHook = SetWinEventHook(EventObjectReorder, EventObjectReorder, IntPtr.Zero,
+            _foregroundChangedCallback, 0, 0, WineventOutOfContext);
         ApplyMode();
     }
 
@@ -99,6 +107,10 @@ public sealed class WindowLayerController : IDisposable
             handled = true;
             Refresh();
         }
+        else if (message == WmWindowPosChanged)
+        {
+            QueueDesktopPlacement();
+        }
         return IntPtr.Zero;
     }
 
@@ -107,7 +119,7 @@ public sealed class WindowLayerController : IDisposable
         var handle = new WindowInteropHelper(_window).Handle;
         if (handle == IntPtr.Zero) return;
 
-        ApplyNoActivateStyle(handle, !_alwaysOnTop && !_interactive);
+        ApplyWidgetStyles(handle, !_alwaysOnTop && !_interactive);
         _window.ShowActivated = _alwaysOnTop || _interactive;
         if (_alwaysOnTop)
         {
@@ -120,10 +132,13 @@ public sealed class WindowLayerController : IDisposable
         QueueDesktopPlacement();
     }
 
-    private void ApplyNoActivateStyle(IntPtr handle, bool enabled)
+    private void ApplyWidgetStyles(IntPtr handle, bool noActivate)
     {
         var current = GetWindowLongPointer(handle, GwlExStyle).ToInt64();
-        var desired = enabled ? current | WsExNoActivate : current & ~WsExNoActivate;
+        // ShowInTaskbar=false alone does not exclude a borderless WPF window
+        // from Alt+Tab. Keep the tool-window flag even during keyboard editing.
+        var desired = (current | WsExToolWindow) & ~WsExAppWindow;
+        desired = noActivate ? desired | WsExNoActivate : desired & ~WsExNoActivate;
         if (desired == current) return;
         SetWindowLongPointer(handle, GwlExStyle, new IntPtr(desired));
         SetWindowPos(handle, IntPtr.Zero, 0, 0, 0, 0,
@@ -132,8 +147,10 @@ public sealed class WindowLayerController : IDisposable
 
     private void OnForegroundWindowChanged(IntPtr hook, uint eventType, IntPtr window, int objectId, int childId, uint eventThread, uint eventTime)
     {
-        if (_disposed || !_alwaysOnTop) return;
-        _window.Dispatcher.BeginInvoke(DispatcherPriority.Normal, UpdateFullscreenState);
+        if (_disposed || _window.Dispatcher.HasShutdownStarted) return;
+        if (eventType == EventObjectReorder &&
+            (_alwaysOnTop || (window != GetDesktopWindow() && !IsDesktopShellWindow(window)))) return;
+        _window.Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, Refresh);
     }
 
     private void UpdateFullscreenState()
@@ -201,7 +218,9 @@ public sealed class WindowLayerController : IDisposable
         var desktopHost = FindDesktopHost();
         if (handle == IntPtr.Zero || desktopHost == IntPtr.Zero) return;
         var windowAboveDesktop = GetWindow(desktopHost, GwHwndPrev);
-        if (windowAboveDesktop == handle || windowAboveDesktop == IntPtr.Zero) return;
+        if (windowAboveDesktop == handle) return;
+        // When the desktop is first in the z-order, IntPtr.Zero is HWND_TOP.
+        // Returning here would leave the widget covered by Show Desktop.
         SetWindowPos(handle, windowAboveDesktop, 0, 0, 0, 0,
             SwpNoMove | SwpNoSize | SwpNoActivate | SwpShowWindow);
     }
@@ -229,6 +248,8 @@ public sealed class WindowLayerController : IDisposable
         _source = null;
         if (_foregroundHook != IntPtr.Zero) UnhookWinEvent(_foregroundHook);
         _foregroundHook = IntPtr.Zero;
+        if (_desktopReorderHook != IntPtr.Zero) UnhookWinEvent(_desktopReorderHook);
+        _desktopReorderHook = IntPtr.Zero;
     }
 
     private static IntPtr GetWindowLongPointer(IntPtr window, int index) =>
@@ -262,6 +283,7 @@ public sealed class WindowLayerController : IDisposable
     [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW")] private static extern IntPtr SetWindowLongPtr64(IntPtr window, int index, IntPtr newValue);
     [DllImport("user32.dll")][return: MarshalAs(UnmanagedType.Bool)] private static extern bool SetWindowPos(IntPtr window, IntPtr insertAfter, int x, int y, int width, int height, uint flags);
     [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] private static extern IntPtr GetDesktopWindow();
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetClassName(IntPtr window, [Out] char[] className, int maximumCount);
     [DllImport("user32.dll")][return: MarshalAs(UnmanagedType.Bool)] private static extern bool IsWindowVisible(IntPtr window);
     [DllImport("user32.dll")][return: MarshalAs(UnmanagedType.Bool)] private static extern bool GetWindowRect(IntPtr window, out NativeRect bounds);

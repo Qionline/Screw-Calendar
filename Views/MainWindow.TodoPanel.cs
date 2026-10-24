@@ -197,9 +197,7 @@ public sealed partial class MainWindow
         toolbar.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         var formats = new StackPanel { Orientation = Orientation.Horizontal };
         AddFormatButton("T", Localization.T("markdown.paragraph"), MarkdownLineKind.Paragraph);
-        AddFormatButton("H1", Localization.T("markdown.heading1"), MarkdownLineKind.Heading1);
-        AddFormatButton("H2", Localization.T("markdown.heading2"), MarkdownLineKind.Heading2);
-        AddFormatButton("H3", Localization.T("markdown.heading3"), MarkdownLineKind.Heading3);
+        AddFormatButton("H", Localization.T("markdown.heading2"), MarkdownLineKind.Heading2);
         AddFormatButton("•", Localization.T("markdown.list"), MarkdownLineKind.Bullet);
         AddFormatButton("☑", Localization.T("markdown.task"), MarkdownLineKind.Task);
         toolbar.Children.Add(formats);

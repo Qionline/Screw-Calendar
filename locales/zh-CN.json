@@ -102,6 +102,7 @@
   "markdown.clearTooltip": "删除这份 Markdown 文档",
   "markdown.save": "保存",
   "markdown.saveTooltip": "保存 Markdown 到本机",
+  "markdown.saveError": "无法保存待办，编辑窗口已保留。请查看日志并重试。",
   "holiday.newYear": "元旦",
   "holiday.springFestival": "春节",
   "holiday.tombSweeping": "清明节",

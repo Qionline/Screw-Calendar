@@ -23,6 +23,8 @@ gh auth setup-git
 
 GitHub Actions 和发布脚本统一使用 .NET SDK `8.0.425`。根目录的 `global.json` 仍保留较宽松的开发环境滚动策略；发布时固定 SDK 是为了让 `packages.lock.json` 与 CI 的隐式 linker 依赖保持一致。
 
+CI 将 SDK 安装到运行器临时目录下的独立 `dotnet` 目录，并检查实际 `dotnet --version`。仅指定 setup-dotnet 的版本不能阻止 `global.json` 选择预装的更高 SDK，因此不能共用运行器的全局安装目录。
+
 ## 发布前检查
 
 1. 更新 `ScrewCalendar.csproj` 中的 `Version`；程序集版本和文件版本由 SDK 自动派生。
