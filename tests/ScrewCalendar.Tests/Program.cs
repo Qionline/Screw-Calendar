@@ -31,6 +31,8 @@ var tests = new (string Name, Action Run)[]
     ("Normal editor formatting toolbar", TestNormalEditorFormattingToolbar),
     ("Markdown image selection replacement", TestMarkdownImageSelectionReplacement),
     ("Archived Markdown images", TestMarkdownImageStore),
+    ("Widget window styles", ScrewCalendar.Tests.WindowLayerTests.StyleTransitions),
+    ("Desktop layer recovery", ScrewCalendar.Tests.WindowLayerTests.DesktopPlacement),
     ("Localization keys", TestLocalizationKeys),
     ("Calendar metadata", TestCalendarMetadata),
     ("Release metadata", TestReleaseMetadata)

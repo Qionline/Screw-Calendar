@@ -8,6 +8,8 @@
 - `TrayIconService`：创建和管理系统托盘图标与菜单。
 - `StartupRegistration`：管理当前用户的 Windows 开机启动项。
 - `WindowLayerController`：管理始终置顶和普通窗口下方的桌面层级，并支持编辑输入时临时激活桌面层窗口。
+  - 主挂件始终设置 `WS_EX_TOOLWINDOW` 并清除 `WS_EX_APPWINDOW`，使其不进入 Alt+Tab；临时启用键盘输入时仍保留这些标记。
+  - 无论是否允许全屏覆盖，都监听前台窗口与桌面层级变化；“显示桌面”抬高桌面后恢复挂件位置，托盘主动隐藏时不恢复显示。
 - `WindowPlacementService`：保存显示器、位置和大小，并在显示器断开时恢复到可见区域。
 - `DialogWindowBehavior`：统一子窗口所有者、位置和激活行为。
 - `ApplicationIconLoader`：加载应用图标。
@@ -28,5 +30,6 @@ WPF 项目可以通过项目引用使用工具包：
 - 只放置可供多个桌面挂件复用的 Windows 行为和控件资源。
 - 日历模型、日历数据及业务界面保留在 Screw Calendar 主项目中。
 - 公开类型发生行为变化时，应同步更新本文件、主项目开发文档和相应回归测试。
+- 窗口层级回归需检查置顶开关、全屏覆盖、桌面遮挡后的恢复、Alt+Tab 排除、内联输入和托盘隐藏；自动化原生窗口测试在有 Explorer 桌面的 Windows 会话中验证层级恢复，无桌面的 CI 会明确跳过该项。
 
 该工具包与 Screw Calendar 一同采用仓库根目录的 GPL-3.0-or-later 许可证。
