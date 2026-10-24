@@ -86,9 +86,18 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          $version = "${{ github.ref_name }}".Substring(1)
+          $changelog = Get-Content .\CHANGELOG.md -Raw
+          $pattern = '(?ms)^## \[' + [regex]::Escape($version) + '\][^\r\n]*\r?\n(?<notes>.*?)(?=^## \[|\z)'
+          $entry = [regex]::Match($changelog, $pattern)
+          if (-not $entry.Success -or [string]::IsNullOrWhiteSpace($entry.Groups['notes'].Value)) {
+            throw "CHANGELOG.md has no release notes for $version."
+          }
+          $notesPath = Join-Path $env:RUNNER_TEMP 'screw-calendar-release-notes.md'
+          $entry.Groups['notes'].Value.Trim() | Set-Content -LiteralPath $notesPath -Encoding utf8
           gh release create "${{ github.ref_name }}" `
             ".\artifacts\ScrewCalendar-${{ github.ref_name }}-${{ env.RUNTIME_IDENTIFIER }}.zip" `
             ".\artifacts\ScrewCalendar-${{ github.ref_name }}-${{ env.RUNTIME_IDENTIFIER }}.zip.sha256" `
             --verify-tag `
-            --generate-notes `
+            --notes-file $notesPath `
             --title "Screw Calendar ${{ github.ref_name }}"

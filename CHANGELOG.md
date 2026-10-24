@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-10-24
+
 ### Changed
 
 - 待办弹窗和底部编辑器的标题工具合并为一个 H 按钮，默认应用 H2；保留三级标题的 Markdown 处理能力。
@@ -67,7 +69,8 @@
 - 简体中文和英文界面。
 - 开源仓库规范、自动化回归测试、持续集成和版本发布流程。
 
-[Unreleased]: https://github.com/Qionline/Screw-Calendar/compare/v1.0.2...HEAD
+[Unreleased]: https://github.com/Qionline/Screw-Calendar/compare/v1.0.3...HEAD
+[1.0.3]: https://github.com/Qionline/Screw-Calendar/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/Qionline/Screw-Calendar/releases/tag/v1.0.2
 [1.0.1]: https://github.com/Qionline/Screw-Calendar/releases/tag/v1.0.1
 [1.0.0]: https://github.com/Qionline/Screw-Calendar/releases/tag/v1.0.0
