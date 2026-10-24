@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -11,20 +12,33 @@ namespace ScrewCalendar;
 
 public sealed partial class MainWindow
 {
-    private bool TryPersistMarkdown(DateTime date, bool permanent, string markdown, Window? owner = null)
+    private bool TryPersistMarkdown(DateTime date, bool permanent, RepeatDocument draft, Window? owner = null)
     {
-        var previous = GetMarkdownDocument(date, permanent);
-        SetMarkdownDocument(date, permanent, markdown);
-        if (_dataStore.Save(_state)) return true;
-        SetMarkdownDocument(date, permanent, previous);
+        if (RepeatDocumentService.TrySave(_state, permanent ? null : CalendarMath.Key(date), draft, _dataStore.Save)) return true;
         System.Windows.MessageBox.Show(owner ?? this, Localization.T("markdown.saveError"), Localization.T("dialog.calendar"), MessageBoxButton.OK, MessageBoxImage.Warning);
         return false;
     }
 
-    private StackPanel RenderMarkdown(string markdown)
+    private bool SaveMarkdownEditor(DateTime date, bool permanent, MarkdownBlockEditor editor, Window? owner = null)
+    {
+        var draft = editor.GetRepeatDraft();
+        if (!TryPersistMarkdown(date, permanent, draft, owner)) return false;
+        var saved = GetRepeatDocument(date, permanent);
+        editor.AcceptRepeatSave(saved.Markdown == draft.Markdown ? saved.Bindings :
+            draft.Bindings.Where(binding => _state.RepeatBlocks.ContainsKey(binding.Id)).ToArray());
+        return true;
+    }
+
+    private RepeatDocument GetRepeatDocument(DateTime date, bool permanent) => permanent
+        ? new(_state.PermanentMarkdown, []) : RepeatDocumentService.Load(_state, CalendarMath.Key(date));
+
+    private void LoadMarkdownEditor(MarkdownBlockEditor editor, DateTime date, bool permanent) =>
+        editor.LoadRepeatDocument(permanent ? null : date, GetRepeatDocument(date, permanent));
+
+    private StackPanel RenderMarkdown(RepeatDocument document)
     {
         var panel = new StackPanel();
-        foreach (var summary in MarkdownDocumentService.Parse(markdown).SummaryLines(3))
+        foreach (var summary in MarkdownDocumentService.Parse(RepeatDocumentService.VisibleSource(document)).SummaryLines(3))
         {
             var text = Text(summary, 14, Foreground());
             text.TextTrimming = TextTrimming.CharacterEllipsis;
@@ -38,7 +52,8 @@ public sealed partial class MainWindow
 
     private MarkdownBlockEditor CreateMarkdownEditor(bool preview = false)
     {
-        var editor = new MarkdownBlockEditor(Foreground(), Muted(), InputBackground(), Line(), Accent(), _uiFont, LoadMarkdownImage, MarkdownSelectionBrush());
+        var editor = new MarkdownBlockEditor(Foreground(), Muted(), InputBackground(), Line(), Accent(), _uiFont, LoadMarkdownImage, MarkdownSelectionBrush())
+        { SurfaceOpacity = _state.Opacity };
         editor.SetPreviewMode(preview);
         AttachMarkdownImageInput(editor);
         return editor;

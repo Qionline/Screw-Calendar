@@ -56,7 +56,7 @@ ScrewCalendar/
 %LocalAppData%\ScrewCalendar\data\holiday-cache\{year}.json
 ```
 
-- `calendar.json` 是版本 3 状态，包括常驻 Markdown、按日期保存的 Markdown、主题、语言、行数和窗口设置。
+- `calendar.json` 是版本 3 状态，包括常驻 Markdown、按日期保存的独立正文、共享重复区块与日期位置引用，以及主题、语言、行数和窗口设置。
 - 当前项目尚未上线，不保留版本 2 日程兼容和迁移代码；旧版本 JSON 会被校验拒绝。
 - 通过 `Ctrl+V` 粘贴或拖入的图片会编码为 PNG，以内容 SHA-256 哈希命名并复制到 `%LocalAppData%\ScrewCalendar\data\assets`；Markdown 只使用新的 `assets/...` 相对路径，删除原图不会影响待办中的图片。
 - `calendar.json.bak` 是最近一次有效主文件的备份。
@@ -80,7 +80,8 @@ ScrewCalendar/
 - 从日期格打开的编辑窗口由入口决定目标，不能在窗口内切换常驻或其他日期，避免覆盖另一份文档。
 - 编辑器默认使用当前行源码编辑，保留完整源码切换；弹窗和内联工具栏均只保留一个 H 标题按钮，默认应用 H2，另提供加粗、列表和任务操作，不显示正文 T、预览或单独的图片按钮。底部保存后恢复排版阅读。
 - `Calendar/MarkdownSnapshot.cs` 从完整 Markdig 语法树生成源码位置、行样式、视觉替换范围、任务位置及摘要；短文档解析结果使用有界缓存。`Controls/MarkdownBlockEditor.Presentation.cs` 在 AvalonEdit 视觉层实现阅读排版，同一正文不创建第二份富文本文档。
-- `MarkdownBlockEditor` 按光标和选区行控制语法展开，鼠标选择期间暂缓重新排版；非当前行复用阅读视觉层。MD 按钮切换完整源码，复杂代码块／图片暂时在编辑中保留源码。同一 `TextDocument` 保留原文、选区和撤销，切行与模式切换不发布内容变更。阅读复制可见文本，编辑复制原始 Markdown；保存不裁剪正文空白。第二期子任务 1 的验收见 `docs/MARKDOWN_PHASE2_TASK1_TESTING.md`。
+- `MarkdownBlockEditor` 按光标和选区行控制语法展开，鼠标选择期间暂缓重新排版；非当前行复用阅读视觉层。MD 按钮切换完整源码，代码块／图片在编辑中保留源码。同一 `TextDocument` 保留原文、选区和撤销，切行与模式切换不发布内容变更。阅读复制可见文本，编辑复制原始 Markdown；保存不裁剪正文空白。当前回归步骤见 [MARKDOWN_TESTING.md](MARKDOWN_TESTING.md)。
+- 日期工具栏额外显示 `Rp`，常驻区不显示。`RepeatBlockParser` 统一解析和属性校验，`RepeatSchedule` 计算日／周／月匹配，`RepeatDocumentService` 组合共享内容与当天正文并统一保存、清理引用和回滚。合法规则修改后清理失效位置并保留新开始日期入口；错误属性保留修复位置。存档读取、导入共用校验和引用整理，整理后重新校验存储限制。详情与验收见 [REPEAT_TESTING.md](REPEAT_TESTING.md)。
 - 便签呈现优先将紧接正文的 `---` 显示为分隔线，保留代码块及 `===` 标题的语义。两处工具栏由同一工厂创建 30×30 格式按钮，包含 B／Ctrl+B 加粗；底部窄栏通过换行和重排动作按钮适配。
 - 列表或任务段落按 Enter 新建同类型、同缩进的段落，任务新段落默认未勾选；复制、剪切和粘贴使用 Markdown 适配保持源语法。
 - 底部渲染后的正文可以选择复制，`- [ ]` / `- [x]` 可直接点击并回写 Markdown；日期格只显示最多三行紧凑摘要。
@@ -207,6 +208,8 @@ dotnet run --project .\tests\ScrewCalendar.Tests\ScrewCalendar.Tests.csproj -c R
 - 版本、日期键、Markdown 长度和界面设置的导入校验。
 - 版本 3 Markdown 存档校验、备份恢复和按日期持久化。
 - Markdown 标题、列表、任务解析与任务状态源码回写。
+- repeat 语法与按钮登记、共享正文和独立上下文、原生撤销、配色与区块阅读交互。
+- 日／周／月规则、月底与闰年、引用清理迁移、旧存档整理、保存回滚及真实日历／今日区域同步。
 - 图片内容哈希命名、重复图片复用，以及删除原始文件后的存档加载。
 - 日历行数上限以及底部面板只读取今天的日期 Markdown。
 - 中英文翻译键完整性。

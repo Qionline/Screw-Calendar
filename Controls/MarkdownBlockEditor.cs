@@ -16,7 +16,6 @@ public sealed partial class MarkdownBlockEditor : Border
     private readonly TextEditor _editor;
     private Brush _muted;
     private Brush _surface;
-    private Brush _line;
     private Brush _accent;
     private readonly FontFamily _fontFamily;
     private readonly Func<string, BitmapSource?> _imageLoader;
@@ -33,7 +32,6 @@ public sealed partial class MarkdownBlockEditor : Border
     {
         _muted = muted;
         _surface = surface;
-        _line = line;
         _accent = accent;
         _fontFamily = fontFamily;
         _imageLoader = imageLoader;
@@ -48,13 +46,16 @@ public sealed partial class MarkdownBlockEditor : Border
             Foreground = foreground,
             FontFamily = fontFamily,
             FontSize = 14,
-            Padding = new Thickness(4, 3, 4, 3),
+            Padding = new Thickness(0, 3, 0, 3),
             AllowDrop = true,
             ShowLineNumbers = false,
             WordWrap = true,
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled
         };
+        // Keep horizontal inset inside the scroll viewport so repeat backgrounds can
+        // surround the text without the ScrollContentPresenter clipping their edges.
+        _editor.TextArea.Margin = new Thickness(RepeatBodyPadding, 0, RepeatBodyPadding, 0);
         _editor.Options.EnableImeSupport = true;
         _editor.Options.EnableHyperlinks = false;
         _editor.Options.EnableEmailHyperlinks = false;
@@ -70,9 +71,11 @@ public sealed partial class MarkdownBlockEditor : Border
             _editor.Resources.Add(typeof(ScrollBar), scrollBarStyle);
 
         InitializePresentation();
+        _editor.Document.Changed += TrackRepeatChange;
         _editor.TextChanged += (_, _) =>
         {
             _snapshot = null;
+            _repeatPresentation = null;
             RefreshSourceLines(redraw: false);
             _editor.TextArea.TextView.Redraw();
             if (!_loading) ContentChanged?.Invoke(this, EventArgs.Empty);
@@ -94,8 +97,11 @@ public sealed partial class MarkdownBlockEditor : Border
     public bool IsPreviewMode { get; private set; }
     public bool IsSourceMode { get; private set; }
     public bool CanToggleTasks { get; set; } = true;
+    public double SurfaceOpacity { get; set; } = 1;
     public MarkdownSnapshot Snapshot => _snapshot ??= MarkdownDocumentService.Parse(_editor.Text);
     private bool UsesMarkdownPresentation => IsPreviewMode || !IsSourceMode;
+    private bool IsDarkSurface => _surface is SolidColorBrush surface &&
+        surface.Color.R * .2126 + surface.Color.G * .7152 + surface.Color.B * .0722 < 128;
 
     /// <summary>Full source is a fallback; live editing and reading use the same presentation.</summary>
     public void SetSourceMode(bool source)
@@ -123,13 +129,16 @@ public sealed partial class MarkdownBlockEditor : Border
     {
         if (IsPreviewMode) return true;
         if (IsSourceMode || lineNumber >= _firstSourceLine && lineNumber <= _lastSourceLine) return false;
+        if (PresentedRepeats.Any(block => lineNumber >= Snapshot.LineIndexAt(block.Start) + 1 &&
+            lineNumber <= Snapshot.LineIndexAt(block.Start + block.Length - 1) + 1 && !RendersRepeat(block))) return false;
         var info = Snapshot.Lines[lineNumber - 1];
-        // Complex blocks stay literal while editing in this first live-editing step.
+        // Code and image blocks remain literal while editing.
         return !info.IsCode && !info.Replacements.Any(item => item.Kind == MarkdownReplacementKind.Image);
     }
 
     public void SetMarkdown(string markdown)
     {
+        ResetRepeatTracking();
         _loading = true;
         try
         {
@@ -162,7 +171,6 @@ public sealed partial class MarkdownBlockEditor : Border
     {
         _muted = muted;
         _surface = surface;
-        _line = line;
         _accent = accent;
         BorderBrush = line;
         Background = IsPreviewMode ? Brushes.Transparent : surface;
@@ -177,6 +185,7 @@ public sealed partial class MarkdownBlockEditor : Border
     {
         UpdateMarkdown(savedMarkdown);
         _editor.Document.UndoStack.ClearAll();
+        ResetRepeatTracking();
     }
 
     public void SetPreviewMode(bool preview, int? caretOffset = null)

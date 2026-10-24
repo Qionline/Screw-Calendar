@@ -164,9 +164,12 @@ internal static class MarkdownTests
             native.Undo(); Render();
             Check(ReferenceEquals(document, native.Document) && editor.GetMarkdown() == source, "Live editing retains native undo and the same document");
             native.Select(0, document.TextLength);
-            var originalClipboard = Clipboard.GetDataObject();
-            try { native.Copy(); Check(Clipboard.GetText() == source, "Live editing copies exact Markdown source"); }
-            finally { if (originalClipboard is not null) Clipboard.SetDataObject(originalClipboard); }
+            var originalClipboard = ClipboardTestAccess.Run(Clipboard.GetDataObject);
+            try { native.Copy(); Check(ClipboardTestAccess.Run(Clipboard.GetText) == source, "Live editing copies exact Markdown source"); }
+            finally
+            {
+                if (originalClipboard is not null) ClipboardTestAccess.Run(() => Clipboard.SetDataObject(originalClipboard));
+            }
             native.SelectedText = "replacement\n---";
             Render();
             Check(editor.GetMarkdown() == "replacement\n---", "Select all and replacement work across rendered blocks");
@@ -304,16 +307,16 @@ internal static class MarkdownTests
             Check(editor.GetMarkdown().Contains("- [x] 尚未完成", StringComparison.Ordinal), "Native checkbox writes back its exact source task");
             Check(!editor.GetMarkdown().Contains("- [x] 这里是代码", StringComparison.Ordinal), "Native checkbox does not touch code blocks");
             var before = editor.GetMarkdown();
-            var originalClipboard = Clipboard.GetDataObject();
+            var originalClipboard = ClipboardTestAccess.Run(Clipboard.GetDataObject);
             try
             {
                 native.Select(0, native.Document.TextLength);
                 native.Copy();
-                var copied = Clipboard.GetText();
+                var copied = ClipboardTestAccess.Run(Clipboard.GetText);
                 Check(copied.Contains("Markdown 阅读与源码", StringComparison.Ordinal) && !copied.Contains("# Markdown", StringComparison.Ordinal), "Reading copy exports displayed text");
-                Check(!((string?)Clipboard.GetData(DataFormats.Html) ?? "").Contains("# Markdown", StringComparison.Ordinal), "Rich-text paste also receives the reading text instead of raw Markdown");
+                Check(!((string?)ClipboardTestAccess.Run(() => Clipboard.GetData(DataFormats.Html)) ?? "").Contains("# Markdown", StringComparison.Ordinal), "Rich-text paste also receives the reading text instead of raw Markdown");
             }
-            finally { if (originalClipboard is not null) Clipboard.SetDataObject(originalClipboard); }
+            finally { if (originalClipboard is not null) ClipboardTestAccess.Run(() => Clipboard.SetDataObject(originalClipboard)); }
             var qa = Environment.GetEnvironmentVariable("SCREW_MARKDOWN_QA_DIR");
             if (!string.IsNullOrEmpty(qa)) SaveImage(background, qa, dark ? "reading-dark.png" : "reading-light.png", 700, 1400);
             editor.SetPreviewMode(false);

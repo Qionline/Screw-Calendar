@@ -15,21 +15,31 @@ namespace ScrewCalendar;
 public sealed partial class MarkdownBlockEditor
 {
     private Point? _previewMouseDown;
+    private Brush MarkdownRuleBrush => new SolidColorBrush(IsDarkSurface
+        ? Color.FromRgb(101, 106, 112) : Color.FromRgb(168, 175, 183));
 
     private void InitializePresentation()
     {
         var view = _editor.TextArea.TextView;
+        // Let repeat cards use the editor's existing horizontal inset, while retaining
+        // the viewport's vertical clip so scrolling cannot paint over the toolbar.
+        view.ClipToBounds = false;
+        view.ElementGenerators.Add(new RepeatElements(this));
         view.ElementGenerators.Add(new ReadingElements(this));
         view.LineTransformers.Add(new ReadingStyles(this));
+        view.LineTransformers.Add(new RepeatSourceStyles(this));
         view.BackgroundRenderers.Add(new CodeBackground(this));
+        view.BackgroundRenderers.Add(new RepeatBackground(this));
         view.SizeChanged += (_, args) =>
         {
+            view.Clip = new RectangleGeometry(new Rect(-RepeatBodyPadding, 0,
+                Math.Max(0, view.ActualWidth + RepeatBodyPadding * 2), Math.Max(0, view.ActualHeight)));
             if (UsesMarkdownPresentation && Math.Abs(args.NewSize.Width - args.PreviousSize.Width) > .5) view.Redraw();
         };
         DataObject.AddCopyingHandler(_editor, (_, args) =>
         {
             if (!IsPreviewMode || args.IsDragDrop) return;
-            var text = Snapshot.PlainText(_editor.SelectionStart, _editor.SelectionLength);
+            var text = ReadingText(_editor.SelectionStart, _editor.SelectionLength);
             args.DataObject.SetData(DataFormats.UnicodeText, text);
             args.DataObject.SetData(DataFormats.Text, text);
             args.DataObject.SetData(DataFormats.StringFormat, text);
@@ -55,8 +65,8 @@ public sealed partial class MarkdownBlockEditor
             if ((point - down).Length > 4 || _editor.SelectionLength > 0 || IsInteractive(args.OriginalSource)) return;
             var position = _editor.GetPositionFromPoint(point);
             var offset = position.HasValue ? _editor.Document.GetOffset(position.Value.Location) : _editor.Document.TextLength;
-            var imageOffset = ImageOffset(args.OriginalSource);
-            if (imageOffset.HasValue) offset = imageOffset.Value;
+            var sourceOffset = SourceOffsetAt(args.OriginalSource);
+            if (sourceOffset.HasValue) offset = sourceOffset.Value;
             var link = HitTestLink(point);
             if (link is not null && Uri.TryCreate(link.Url, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https" or "mailto")
             {
@@ -115,17 +125,17 @@ public sealed partial class MarkdownBlockEditor
         return false;
     }
 
-    private static int? ImageOffset(object source)
+    private static int? SourceOffsetAt(object source)
     {
         for (var current = source as DependencyObject; current is not null; current = GetElementParent(current))
-            if (current is FrameworkElement { Tag: ImageSourceOffset offset }) return offset.Offset;
+            if (current is FrameworkElement { Tag: RenderedSourceOffset offset }) return offset.Offset;
         return null;
     }
 
     private static DependencyObject? GetElementParent(DependencyObject element) =>
         element is Visual or System.Windows.Media.Media3D.Visual3D ? VisualTreeHelper.GetParent(element) : LogicalTreeHelper.GetParent(element);
 
-    private sealed record ImageSourceOffset(int Offset);
+    private sealed record RenderedSourceOffset(int Offset);
 
     private double AvailableWidth(int offset)
     {
@@ -177,7 +187,7 @@ public sealed partial class MarkdownBlockEditor
         var bitmap = _imageLoader(replacement.Text);
         var width = AvailableWidth(replacement.Start);
         if (bitmap is null)
-            return new TextBlock { Text = Localization.T("markdown.imageMissing"), Foreground = _muted, ToolTip = replacement.Text, Tag = new ImageSourceOffset(replacement.Start) };
+            return new TextBlock { Text = Localization.T("markdown.imageMissing"), Foreground = _muted, ToolTip = replacement.Text, Tag = new RenderedSourceOffset(replacement.Start) };
         return new Image
         {
             Source = bitmap,
@@ -187,7 +197,7 @@ public sealed partial class MarkdownBlockEditor
             StretchDirection = StretchDirection.DownOnly,
             Margin = new Thickness(0, 5, 0, 5),
             ToolTip = replacement.Label,
-            Tag = new ImageSourceOffset(replacement.Start)
+            Tag = new RenderedSourceOffset(replacement.Start)
         };
     }
 
@@ -228,7 +238,7 @@ public sealed partial class MarkdownBlockEditor
                 {
                     Width = _owner.AvailableWidth(offset),
                     Height = 18,
-                    Child = new Border { Height = 1, Background = _owner._line, VerticalAlignment = VerticalAlignment.Center }
+                    Child = new Border { Height = 1, Background = _owner.MarkdownRuleBrush, VerticalAlignment = VerticalAlignment.Center, SnapsToDevicePixels = true }
                 }),
                 _ => new FormattedTextElement(replacement.Text, replacement.Length)
             };

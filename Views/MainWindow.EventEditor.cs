@@ -18,7 +18,7 @@ public sealed partial class MainWindow
         var editorKey = permanent ? "permanent" : $"date:{CalendarMath.Key(date)}";
         if (!_markdownEditors.TryPrepareToOpen(editorKey)) return;
 
-        var existing = GetMarkdownDocument(date, permanent);
+        var existing = GetRepeatDocument(date, permanent).Markdown;
         var dialog = NewEventDialog(string.Empty, ownerPosition);
         var previewsToday = !permanent && date.Date == _today.Date;
         var previewTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(120) };
@@ -38,12 +38,12 @@ public sealed partial class MainWindow
         root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(46) });
 
         var editor = CreateMarkdownEditor();
-        editor.SetMarkdown(existing);
+        LoadMarkdownEditor(editor, date, permanent);
         Grid.SetRow(editor, 1); root.Children.Add(editor);
 
         if (previewsToday)
         {
-            _todayMarkdownPreview = existing;
+            _todayMarkdownPreview = editor.GetRepeatDraft();
             _todayMarkdownPreviewSink = editor.UpdateMarkdown;
             RefreshTodayMarkdownPreview();
         }
@@ -62,13 +62,14 @@ public sealed partial class MainWindow
         void PublishTodayPreview()
         {
             if (!previewsToday) return;
-            _todayMarkdownPreview = editor.GetMarkdown();
+            _todayMarkdownPreview = editor.GetRepeatDraft();
             if (!previewTimer.IsEnabled) previewTimer.Start();
         }
 
-        bool SaveAndClose(string markdown)
+        bool SaveAndClose(bool clear = false)
         {
-            if (!TryPersistMarkdown(date, permanent, markdown, dialog))
+            if (!(clear ? TryPersistMarkdown(date, permanent, new RepeatDocument(string.Empty, []), dialog)
+                : SaveMarkdownEditor(date, permanent, editor, dialog)))
             {
                 dialog.Activate();
                 return false;
@@ -79,7 +80,7 @@ public sealed partial class MainWindow
             return true;
         }
 
-        bool SaveDraftAndClose() => SaveAndClose(editor.GetMarkdown());
+        bool SaveDraftAndClose() => SaveAndClose();
 
         var actions = new Grid { VerticalAlignment = VerticalAlignment.Bottom };
         actions.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -91,7 +92,7 @@ public sealed partial class MainWindow
             clear.HorizontalAlignment = HorizontalAlignment.Left; clear.HorizontalContentAlignment = HorizontalAlignment.Left;
             clear.Foreground = WorkBrush(); clear.Background = Brushes.Transparent; clear.BorderBrush = Brushes.Transparent;
             clear.BorderThickness = new Thickness(0); clear.Template = RoundedButtonTemplate(true);
-            clear.Click += (_, _) => SaveAndClose(string.Empty);
+            clear.Click += (_, _) => SaveAndClose(clear: true);
             actions.Children.Add(clear);
         }
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
@@ -109,23 +110,7 @@ public sealed partial class MainWindow
         dialog.Show();
     }
 
-    private string GetMarkdownDocument(DateTime date, bool permanent)
-    {
-        if (permanent) return _state.PermanentMarkdown;
-        return _state.DateMarkdown.TryGetValue(CalendarMath.Key(date), out var markdown) ? markdown : string.Empty;
-    }
-
-    private void SetMarkdownDocument(DateTime date, bool permanent, string markdown)
-    {
-        if (permanent)
-        {
-            _state.PermanentMarkdown = markdown;
-            return;
-        }
-        var key = CalendarMath.Key(date);
-        if (markdown.Length == 0) _state.DateMarkdown.Remove(key);
-        else _state.DateMarkdown[key] = markdown;
-    }
+    private string GetMarkdownDocument(DateTime date, bool permanent) => GetRepeatDocument(date, permanent).Markdown;
 
     private WrapPanel CreateMarkdownFormatTools(MarkdownBlockEditor editor)
     {
@@ -158,6 +143,13 @@ public sealed partial class MainWindow
             var button = FormatToolButton(item.Label, Localization.T(item.Key));
             button.Click += (_, _) => editor.ApplyKind(item.Kind);
             panel.Children.Add(button);
+        }
+        if (editor.CanUseRepeat)
+        {
+            var repeat = FormatToolButton("Rp", Localization.T("markdown.repeat"));
+            repeat.FontSize = 11;
+            repeat.Click += (_, _) => editor.InsertRepeat();
+            panel.Children.Add(repeat);
         }
         return panel;
     }

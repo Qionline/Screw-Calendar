@@ -74,7 +74,7 @@ public sealed partial class MainWindow : Window
     private double _todoResizeHeight;
     private Window? _settingsDialog;
     private readonly MarkdownEditorCoordinator _markdownEditors = new();
-    private string? _todayMarkdownPreview;
+    private RepeatDocument? _todayMarkdownPreview;
     private Action<string>? _todayMarkdownPreviewSink;
 
     private static readonly string[] WeekdayKeys = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
@@ -429,14 +429,15 @@ public sealed partial class MainWindow : Window
         Grid.SetRow(top, 0);
         content.Children.Add(top);
 
-        if (_state.DateMarkdown.TryGetValue(key, out var markdown) && !string.IsNullOrWhiteSpace(markdown))
+        var document = GetRepeatDocument(date, false);
+        if (!string.IsNullOrWhiteSpace(document.Markdown))
         {
             var preview = new Border
             {
                 Background = Brushes.Transparent,
                 Cursor = Cursors.Hand,
                 ClipToBounds = true,
-                Child = RenderMarkdown(markdown),
+                Child = RenderMarkdown(document),
                 ToolTip = Localization.T("markdown.editTooltip")
             };
             preview.MouseLeftButtonDown += (_, eventArgs) =>
