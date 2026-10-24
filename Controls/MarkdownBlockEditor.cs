@@ -1,7 +1,5 @@
 using System;
-using System.Collections.Generic;
 using System.Linq;
-using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -9,65 +7,41 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using ICSharpCode.AvalonEdit;
-using ICSharpCode.AvalonEdit.Document;
-using ICSharpCode.AvalonEdit.Rendering;
 
 namespace ScrewCalendar;
 
-/// <summary>
-/// Markdown editor backed by one AvalonEdit TextDocument.
-///
-/// The document text is the single source of truth. Markdown decorations and
-/// images are rendered by AvalonEdit visual layers, so normal selection,
-/// multiline editing, clipboard operations and undo never depend on a WPF
-/// FlowDocument tree.
-/// </summary>
-public sealed class MarkdownBlockEditor : Border
+/// <summary>Source editing and native reading share one AvalonEdit document, selection and undo stack.</summary>
+public sealed partial class MarkdownBlockEditor : Border
 {
-    private static readonly Regex ImageLine = new(@"^!\[(.*?)\]\((.*?)\)\s*$", RegexOptions.Compiled);
-    private static readonly Regex TaskLine = new(@"^(\s*)[-*+]\s+\[([ xX])\]\s*(.*)$", RegexOptions.Compiled);
-    private static readonly Regex BulletLine = new(@"^(\s*)[-*+]\s+(.+)$", RegexOptions.Compiled);
-    private static readonly Regex HeadingLine = new(@"^(\s*)(#{1,3})\s+(.+)$", RegexOptions.Compiled);
-
     private readonly TextEditor _editor;
-    private readonly Brush _foreground;
-    private readonly Brush _muted;
-    private readonly Brush _surface;
-    private readonly Brush _line;
-    private readonly Brush _accent;
+    private Brush _muted;
+    private Brush _surface;
+    private Brush _line;
+    private Brush _accent;
     private readonly FontFamily _fontFamily;
     private readonly Func<string, BitmapSource?> _imageLoader;
-    private readonly MarkdownVisualGenerator _visualGenerator;
-    private readonly MarkdownColorizer _colorizer;
+    private MarkdownSnapshot? _snapshot;
     private bool _loading;
-    private bool _enterNormalizationScheduled;
-    private MarkdownLineKind? _pendingEnterKind;
-    private int _pendingEnterIndent;
+    private int _savedSelectionStart;
+    private int _savedSelectionLength;
+    private int _firstSourceLine = 1;
+    private int _lastSourceLine = 1;
+    private bool _editingMouseDown;
 
-    public MarkdownBlockEditor(
-        Brush foreground,
-        Brush muted,
-        Brush surface,
-        Brush line,
-        Brush accent,
-        FontFamily fontFamily,
-        Func<string, BitmapSource?> imageLoader,
-        Brush? selectionBrush = null)
+    public MarkdownBlockEditor(Brush foreground, Brush muted, Brush surface, Brush line, Brush accent,
+        FontFamily fontFamily, Func<string, BitmapSource?> imageLoader, Brush? selectionBrush = null)
     {
-        _foreground = foreground;
         _muted = muted;
         _surface = surface;
         _line = line;
         _accent = accent;
         _fontFamily = fontFamily;
         _imageLoader = imageLoader;
-
         Background = surface;
         BorderBrush = line;
         BorderThickness = new Thickness(1);
         CornerRadius = new CornerRadius(7);
         Padding = new Thickness(10, 8, 10, 8);
-
         _editor = new TextEditor
         {
             Background = Brushes.Transparent,
@@ -82,549 +56,316 @@ public sealed class MarkdownBlockEditor : Border
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled
         };
         _editor.Options.EnableImeSupport = true;
-        _editor.Options.EnableHyperlinks = true;
+        _editor.Options.EnableHyperlinks = false;
         _editor.Options.EnableEmailHyperlinks = false;
-        _editor.Options.ConvertTabsToSpaces = false;
         _editor.Options.IndentationSize = 2;
         _editor.TextArea.SelectionBrush = selectionBrush ?? CreateFallbackSelectionBrush(accent, surface);
         _editor.TextArea.SelectionForeground = foreground;
-        // AvalonEdit draws a separate selection outline by default. It uses
-        // the system highlight pen, which is why a dark blue hairline remains
-        // around an otherwise light selection fill. The fill is sufficient for
-        // this editor, so make that outline fully transparent.
-        var transparentSelectionBorder = new Pen(Brushes.Transparent, 0);
-        transparentSelectionBorder.Freeze();
-        _editor.TextArea.SelectionBorder = transparentSelectionBorder;
+        var selectionBorder = new Pen(Brushes.Transparent, 0);
+        selectionBorder.Freeze();
+        _editor.TextArea.SelectionBorder = selectionBorder;
         _editor.TextArea.SelectionCornerRadius = 0;
         _editor.TextArea.Caret.CaretBrush = accent;
         if (Application.Current?.TryFindResource("ToolkitMinimalScrollBarStyle") is Style scrollBarStyle)
             _editor.Resources.Add(typeof(ScrollBar), scrollBarStyle);
 
-        _visualGenerator = new MarkdownVisualGenerator(this);
-        _colorizer = new MarkdownColorizer(_foreground, _muted, _accent, _fontFamily);
-        _editor.TextArea.TextView.ElementGenerators.Add(_visualGenerator);
-        _editor.TextArea.TextView.LineTransformers.Add(_colorizer);
-
+        InitializePresentation();
         _editor.TextChanged += (_, _) =>
         {
-            if (_loading) return;
-            ScheduleEnterNormalization();
-            RaiseChanged();
+            _snapshot = null;
+            RefreshSourceLines(redraw: false);
+            _editor.TextArea.TextView.Redraw();
+            if (!_loading) ContentChanged?.Invoke(this, EventArgs.Empty);
         };
-        _editor.PreviewKeyDown += TrackEnterInheritance;
+        _editor.PreviewKeyDown += OnEditorKeyDown;
+        _editor.TextArea.Caret.PositionChanged += (_, _) => RefreshSourceLines();
+        _editor.TextArea.SelectionChanged += (_, _) => RefreshSourceLines();
         Child = _editor;
+        MouseLeftButtonDown += (_, e) =>
+        {
+            if (e.Handled || IsPreviewMode || _editor.IsKeyboardFocusWithin) return;
+            FocusEditor();
+            e.Handled = true;
+        };
     }
-
-    private static Brush CreateFallbackSelectionBrush(Brush accent, Brush surface)
-    {
-        if (accent is not SolidColorBrush accentBrush || surface is not SolidColorBrush surfaceBrush)
-            return accent;
-
-        // AvalonEdit expects an opaque selection fill. Keep the existing accent
-        // on dark surfaces; on light surfaces, blend a small amount of the
-        // current accent into the editor surface so selected text stays readable.
-        var surfaceColor = surfaceBrush.Color;
-        var surfaceLuminance = (0.2126 * surfaceColor.R + 0.7152 * surfaceColor.G + 0.0722 * surfaceColor.B) / 255.0;
-        if (surfaceLuminance < 0.5)
-            return new SolidColorBrush(accentBrush.Color);
-
-        const double accentAmount = 0.14;
-        var accentColor = accentBrush.Color;
-        var blended = Color.FromRgb(
-            BlendChannel(surfaceColor.R, accentColor.R, accentAmount),
-            BlendChannel(surfaceColor.G, accentColor.G, accentAmount),
-            BlendChannel(surfaceColor.B, accentColor.B, accentAmount));
-        return new SolidColorBrush(blended);
-    }
-
-    private static byte BlendChannel(byte from, byte to, double amount) =>
-        (byte)Math.Round(from + (to - from) * amount);
 
     public event EventHandler? ContentChanged;
+    public event Action<int>? EditRequested;
+    public bool IsPreviewMode { get; private set; }
+    public bool IsSourceMode { get; private set; }
+    public bool CanToggleTasks { get; set; } = true;
+    public MarkdownSnapshot Snapshot => _snapshot ??= MarkdownDocumentService.Parse(_editor.Text);
+    private bool UsesMarkdownPresentation => IsPreviewMode || !IsSourceMode;
 
-    public void SetMarkdown(string markdown)
+    /// <summary>Full source is a fallback; live editing and reading use the same presentation.</summary>
+    public void SetSourceMode(bool source)
     {
-        ClearPendingEnterNormalization();
-        _loading = true;
-        try
-        {
-            var value = markdown ?? string.Empty;
-            _editor.Document.BeginUpdate();
-            try
-            {
-                _editor.Document.Replace(0, _editor.Document.TextLength, value);
-            }
-            finally
-            {
-                _editor.Document.EndUpdate();
-            }
-
-            _editor.Document.UndoStack.ClearAll();
-            _editor.Select(0, 0);
-        }
-        finally
-        {
-            _loading = false;
-        }
+        if (source == IsSourceMode) return;
+        IsSourceMode = source;
         _editor.TextArea.TextView.Redraw();
     }
 
-    public string GetMarkdown() => _editor.Text.TrimEnd('\r', '\n');
-
-    public void ApplyKind(MarkdownLineKind kind)
+    private void RefreshSourceLines(bool redraw = true)
     {
-        if (kind == MarkdownLineKind.Image || _editor.Document.TextLength == 0) return;
-
-        var selectionStart = _editor.SelectionStart;
-        var selectionEnd = selectionStart + _editor.SelectionLength;
-        var firstLine = _editor.Document.GetLineByOffset(Math.Min(selectionStart, _editor.Document.TextLength));
-        var lastOffset = selectionEnd > selectionStart
-            ? Math.Max(selectionStart, Math.Min(selectionEnd - 1, _editor.Document.TextLength))
-            : selectionStart;
-        var lastLine = _editor.Document.GetLineByOffset(lastOffset);
-        var replaceStart = firstLine.Offset;
-        var replaceEnd = lastLine.EndOffset;
-        var source = _editor.Document.GetText(replaceStart, replaceEnd - replaceStart);
-        var newline = source.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n";
-        var lines = source.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
-        var formatted = string.Join(newline, lines.Select(line => FormatLine(line, kind)));
-
-        _editor.Document.BeginUpdate();
-        try
-        {
-            _editor.Document.Replace(replaceStart, replaceEnd - replaceStart, formatted);
-        }
-        finally
-        {
-            _editor.Document.EndUpdate();
-        }
-        _editor.Select(replaceStart, formatted.Length);
-        RaiseChanged();
+        // Keep the hit-test geometry fixed until AvalonEdit has finished a mouse selection.
+        if (_editingMouseDown) return;
+        var start = _editor.SelectionLength > 0 ? _editor.SelectionStart : _editor.CaretOffset;
+        var end = _editor.SelectionLength > 0 ? start + _editor.SelectionLength - 1 : start;
+        var first = _editor.Document.GetLineByOffset(start).LineNumber;
+        var last = _editor.Document.GetLineByOffset(end).LineNumber;
+        if (first == _firstSourceLine && last == _lastSourceLine) return;
+        _firstSourceLine = first;
+        _lastSourceLine = last;
+        if (redraw && !IsPreviewMode && UsesMarkdownPresentation) _editor.TextArea.TextView.Redraw();
     }
 
-    public void AddImage(string relativePath, string altText = "image")
+    private bool RendersLine(int lineNumber)
     {
-        if (string.IsNullOrWhiteSpace(relativePath)) return;
-        var reference = MarkdownDocumentService.SerializeLine(
-            new MarkdownLine(MarkdownLineKind.Image, altText ?? "image", ImagePath: relativePath));
-        var start = _editor.SelectionStart;
-        var length = _editor.SelectionLength;
+        if (IsPreviewMode) return true;
+        if (IsSourceMode || lineNumber >= _firstSourceLine && lineNumber <= _lastSourceLine) return false;
+        var info = Snapshot.Lines[lineNumber - 1];
+        // Complex blocks stay literal while editing in this first live-editing step.
+        return !info.IsCode && !info.Replacements.Any(item => item.Kind == MarkdownReplacementKind.Image);
+    }
 
-        _editor.Document.BeginUpdate();
+    public void SetMarkdown(string markdown)
+    {
+        _loading = true;
         try
         {
-            if (length > 0)
-            {
-                _editor.Document.Replace(start, length, reference);
-            }
-            else if (_editor.Document.TextLength == 0)
-            {
-                _editor.Document.Insert(0, reference);
-                start = 0;
-            }
-            else
-            {
-                var line = _editor.Document.GetLineByOffset(Math.Min(_editor.CaretOffset, _editor.Document.TextLength));
-                var newline = DetectNewline();
-                var before = line.Length > 0 ? newline : string.Empty;
-                var insertion = before + reference;
-                var insertionOffset = line.EndOffset;
-                _editor.Document.Insert(insertionOffset, insertion);
-                start = insertionOffset + before.Length;
-            }
+            _editor.Text = markdown ?? string.Empty;
+            _editor.Document.UndoStack.ClearAll();
+            _editor.Select(0, 0);
+            _savedSelectionStart = _savedSelectionLength = 0;
         }
-        finally
-        {
-            _editor.Document.EndUpdate();
-        }
+        finally { _loading = false; }
+    }
 
-        _editor.Select(start + reference.Length, 0);
-        _editor.TextArea.Caret.BringCaretToView();
-        RaiseChanged();
+    /// <summary>Refresh an existing reader without replacing its document or resetting scroll/selection.</summary>
+    public void UpdateMarkdown(string markdown)
+    {
+        var old = _editor.Text;
+        if (old == markdown) return;
+        var start = 0;
+        while (start < old.Length && start < markdown.Length && old[start] == markdown[start]) start++;
+        var oldEnd = old.Length;
+        var newEnd = markdown.Length;
+        while (oldEnd > start && newEnd > start && old[oldEnd - 1] == markdown[newEnd - 1]) { oldEnd--; newEnd--; }
+        _loading = true;
+        try { _editor.Document.Replace(start, oldEnd - start, markdown.Substring(start, newEnd - start)); }
+        finally { _loading = false; }
+    }
+
+    public string GetMarkdown() => _editor.Text;
+
+    public void UpdateAppearance(Brush foreground, Brush muted, Brush surface, Brush line, Brush accent, Brush selection)
+    {
+        _muted = muted;
+        _surface = surface;
+        _line = line;
+        _accent = accent;
+        BorderBrush = line;
+        Background = IsPreviewMode ? Brushes.Transparent : surface;
+        _editor.Foreground = foreground;
+        _editor.TextArea.SelectionForeground = foreground;
+        _editor.TextArea.SelectionBrush = selection;
+        _editor.TextArea.Caret.CaretBrush = IsPreviewMode ? Brushes.Transparent : accent;
+        _editor.TextArea.TextView.Redraw();
+    }
+
+    public void DiscardDraft(string savedMarkdown)
+    {
+        UpdateMarkdown(savedMarkdown);
+        _editor.Document.UndoStack.ClearAll();
+    }
+
+    public void SetPreviewMode(bool preview, int? caretOffset = null)
+    {
+        if (preview == IsPreviewMode) return;
+        var top = _editor.TextArea.TextView.GetPosition(new Point(0, _editor.VerticalOffset));
+        var topLine = top?.Line ?? Math.Max(1, _editor.TextArea.TextView.VisualLinesValid && _editor.TextArea.TextView.VisualLines.Count > 0
+            ? _editor.TextArea.TextView.VisualLines[0].FirstDocumentLine.LineNumber : 1);
+        var pixelOffset = _editor.VerticalOffset;
+        if (preview)
+        {
+            _savedSelectionStart = _editor.SelectionStart;
+            _savedSelectionLength = _editor.SelectionLength;
+            _editor.Select(_editor.CaretOffset, 0);
+        }
+        IsPreviewMode = preview;
+        _editingMouseDown = false;
+        _editor.IsReadOnly = preview;
+        _editor.TextArea.Caret.CaretBrush = preview ? Brushes.Transparent : _accent;
+        BorderThickness = preview ? new Thickness(0) : new Thickness(1);
+        Padding = preview ? new Thickness(0) : new Thickness(10, 8, 10, 8);
+        Background = preview ? Brushes.Transparent : _surface;
+        _editor.TextArea.TextView.Redraw();
+        _editor.UpdateLayout();
+        if (_editor.TextArea.TextView.VisualLinesValid)
+        {
+            var line = _editor.Document.GetLineByNumber(Math.Clamp(topLine, 1, _editor.Document.LineCount));
+            _editor.ScrollToVerticalOffset(_editor.TextArea.TextView.GetVisualTopByDocumentLine(line.LineNumber));
+        }
+        else _editor.ScrollToVerticalOffset(pixelOffset);
+        if (!preview)
+        {
+            var start = Math.Clamp(caretOffset ?? _savedSelectionStart, 0, _editor.Document.TextLength);
+            _editor.Select(start, caretOffset.HasValue ? 0 : Math.Min(_savedSelectionLength, _editor.Document.TextLength - start));
+            RefreshSourceLines();
+        }
     }
 
     public void FocusEditor()
     {
         _editor.Focus();
-        _editor.Select(_editor.Document.TextLength, 0);
+        _editor.TextArea.Focus();
+    }
+
+    public void ApplyKind(MarkdownLineKind kind)
+    {
+        if (IsPreviewMode || kind == MarkdownLineKind.Image) return;
+        var snapshot = Snapshot;
+        var start = _editor.SelectionStart;
+        var last = _editor.SelectionLength == 0 ? start : start + _editor.SelectionLength - 1;
+        var firstLine = snapshot.LineIndexAt(start);
+        var lastLine = snapshot.LineIndexAt(last);
+        _editor.Document.BeginUpdate();
+        try
+        {
+            for (var index = lastLine; index >= firstLine; index--)
+            {
+                var line = snapshot.Lines[index];
+                _editor.Document.Replace(line.Offset, line.Length, MarkdownDocumentService.FormatLine(snapshot, index, kind));
+            }
+        }
+        finally { _editor.Document.EndUpdate(); }
+        var first = _editor.Document.GetLineByNumber(firstLine + 1);
+        var final = _editor.Document.GetLineByNumber(lastLine + 1);
+        _editor.Select(first.Offset, final.EndOffset - first.Offset);
+        FocusEditor();
+    }
+
+    public void AddImage(string relativePath, string altText = "image")
+    {
+        if (IsPreviewMode || string.IsNullOrWhiteSpace(relativePath)) return;
+        var safeAlt = altText.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("[", "\\[", StringComparison.Ordinal)
+            .Replace("]", "\\]", StringComparison.Ordinal).Replace("\r", " ", StringComparison.Ordinal).Replace("\n", " ", StringComparison.Ordinal);
+        var path = relativePath.Replace("\\", "/", StringComparison.Ordinal).Replace("(", "%28", StringComparison.Ordinal).Replace(")", "%29", StringComparison.Ordinal);
+        var reference = $"![{safeAlt}]({path})";
+        var start = _editor.SelectionStart;
+        var length = _editor.SelectionLength;
+        var prefix = "";
+        var suffix = "";
+        if (length == 0 && _editor.Document.TextLength > 0)
+        {
+            var line = _editor.Document.GetLineByOffset(_editor.CaretOffset);
+            start = line.EndOffset;
+            if (line.Length > 0) prefix = NewlineAt(line.LineNumber);
+        }
+        else if (length > 0)
+        {
+            if (start > 0 && _editor.Document.GetCharAt(start - 1) is not '\r' and not '\n') prefix = NewlineAt(1);
+            if (start + length < _editor.Document.TextLength && _editor.Document.GetCharAt(start + length) is not '\r' and not '\n') suffix = NewlineAt(1);
+        }
+        _editor.Document.Replace(start, length, prefix + reference + suffix);
+        _editor.Select(start + prefix.Length + reference.Length, 0);
+        FocusEditor();
         _editor.TextArea.Caret.BringCaretToView();
     }
 
-    private void TrackEnterInheritance(object? sender, KeyEventArgs eventArgs)
+    private string NewlineAt(int lineNumber)
     {
-        if (eventArgs.Handled || eventArgs.Key != Key.Enter || Keyboard.Modifiers != ModifierKeys.None) return;
-        if (_editor.SelectionLength != 0) return;
+        var line = _editor.Document.GetLineByNumber(lineNumber);
+        if (line.DelimiterLength == 0) line = line.PreviousLine ?? line;
+        return line.DelimiterLength > 0 ? _editor.Document.GetText(line.EndOffset, line.DelimiterLength) : Environment.NewLine;
+    }
 
-        var line = _editor.Document.GetLineByOffset(Math.Min(_editor.CaretOffset, _editor.Document.TextLength));
-        var source = _editor.Document.GetText(line.Offset, line.Length);
-        if (TryReadLine(source, out var parsed) && parsed.Kind is MarkdownLineKind.Bullet or MarkdownLineKind.Task)
+    private void OnEditorKeyDown(object sender, KeyEventArgs args)
+    {
+        if (!IsPreviewMode && !args.Handled && args.Key == Key.B && Keyboard.Modifiers == ModifierKeys.Control)
         {
-            _pendingEnterKind = parsed.Kind;
-            _pendingEnterIndent = parsed.Indent;
-            _enterNormalizationScheduled = false;
+            ToggleBold();
+            args.Handled = true;
+            return;
+        }
+        if (IsPreviewMode || args.Handled || args.Key != Key.Enter || Keyboard.Modifiers != ModifierKeys.None || _editor.SelectionLength > 0) return;
+        args.Handled = ContinueListOnEnter();
+    }
+
+    public void ToggleBold()
+    {
+        if (IsPreviewMode) return;
+        var start = _editor.SelectionStart;
+        var length = _editor.SelectionLength;
+        var source = _editor.Text;
+        var selected = source.Substring(start, length);
+        string replacement;
+        var selectionOffset = 0;
+        if (start >= 2 && start + length + 2 <= source.Length &&
+            source.AsSpan(start - 2, 2).SequenceEqual("**") && source.AsSpan(start + length, 2).SequenceEqual("**"))
+        {
+            start -= 2;
+            length += 4;
+            replacement = selected;
+        }
+        else if (selected.IndexOfAny(['\r', '\n']) < 0 && selected.Length >= 4 && selected.StartsWith("**", StringComparison.Ordinal) && selected.EndsWith("**", StringComparison.Ordinal))
+        {
+            replacement = selected[2..^2];
+        }
+        else if (length == 0)
+        {
+            replacement = "****";
+            selectionOffset = 2;
         }
         else
         {
-            ClearPendingEnterNormalization();
+            // Format each physical line independently, preserving blank lines, indentation,
+            // and LF/CRLF. Emphasis delimiters next to whitespace would not parse as bold.
+            var lines = System.Text.RegularExpressions.Regex.Matches(selected, @"[^\r\n]+");
+            var remove = lines.Select(match => match.Value.Trim()).Where(line => line.Length > 0)
+                .All(line => line.Length >= 4 && line.StartsWith("**", StringComparison.Ordinal) && line.EndsWith("**", StringComparison.Ordinal));
+            replacement = System.Text.RegularExpressions.Regex.Replace(selected, @"[^\r\n]+", match =>
+            {
+                var line = match.Value;
+                var content = line.Trim();
+                if (content.Length == 0) return line;
+                var leading = line.Length - line.TrimStart().Length;
+                return line[..leading] + (remove ? content[2..^2] : "**" + content + "**") + line[(leading + content.Length)..];
+            });
         }
+        _editor.Document.Replace(start, length, replacement);
+        _editor.Select(start + selectionOffset, length == 0 ? 0 : replacement.Length);
+        FocusEditor();
     }
 
-    private void ScheduleEnterNormalization()
+    internal bool ContinueListOnEnter()
     {
-        if (_loading || _pendingEnterKind is null || _enterNormalizationScheduled) return;
-        _enterNormalizationScheduled = true;
-        Dispatcher.BeginInvoke(
-            System.Windows.Threading.DispatcherPriority.Background,
-            new Action(NormalizeInheritedLine));
-    }
-
-    private void NormalizeInheritedLine()
-    {
-        _enterNormalizationScheduled = false;
-        var kind = _pendingEnterKind;
-        var indent = _pendingEnterIndent;
-        ClearPendingEnterNormalization();
-        if (kind is null || _loading) return;
-
-        var line = _editor.Document.GetLineByOffset(Math.Min(_editor.CaretOffset, _editor.Document.TextLength));
-        var source = _editor.Document.GetText(line.Offset, line.Length);
-        if (TryReadLine(source, out var parsed) && parsed.Kind is MarkdownLineKind.Bullet or MarkdownLineKind.Task) return;
-
-        var content = source.TrimStart();
-        var formatted = MarkdownDocumentService.SerializeLine(
-            new MarkdownLine(kind.Value, content, IsChecked: false, Indent: indent));
-        if (string.Equals(source, formatted, StringComparison.Ordinal)) return;
-
-        _editor.Document.Replace(line.Offset, line.Length, formatted);
-        _editor.CaretOffset = line.Offset + formatted.Length;
-        RaiseChanged();
-    }
-
-    private void ClearPendingEnterNormalization()
-    {
-        _pendingEnterKind = null;
-        _pendingEnterIndent = 0;
-        _enterNormalizationScheduled = false;
-    }
-
-    private string DetectNewline() => _editor.Text.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : Environment.NewLine;
-
-    private static string FormatLine(string source, MarkdownLineKind kind)
-    {
-        if (string.IsNullOrWhiteSpace(source)) return string.Empty;
-        if (!TryReadLine(source, out var parsed))
-            parsed = new MarkdownLine(MarkdownLineKind.Paragraph, source.Trim());
-        if (parsed.Kind == MarkdownLineKind.Image) return source;
-        return MarkdownDocumentService.SerializeLine(
-            new MarkdownLine(kind, parsed.Text, kind == MarkdownLineKind.Task && parsed.IsChecked, parsed.Indent));
-    }
-
-    private static bool TryReadLine(string source, out MarkdownLine line)
-    {
-        var parsed = MarkdownDocumentService.ParseLines(source).FirstOrDefault();
-        if (parsed is null)
+        var snapshot = Snapshot;
+        var index = snapshot.LineIndexAt(_editor.CaretOffset);
+        var line = snapshot.Lines[index];
+        if (line.IsCode || line.ListMarker is not { } marker || _editor.CaretOffset < marker.ContentStart) return false;
+        var outerPrefix = snapshot.Source.Substring(line.Offset, marker.Start - line.Offset);
+        if (string.IsNullOrWhiteSpace(snapshot.Source.Substring(marker.ContentStart, line.Offset + line.Length - marker.ContentStart)))
         {
-            line = new MarkdownLine(MarkdownLineKind.Paragraph, source.Trim());
-            return false;
+            _editor.Document.Remove(marker.Start, marker.ContentStart - marker.Start);
+            _editor.CaretOffset = marker.Start;
+            return true;
         }
-        line = parsed;
+        var insertion = NewlineAt(index + 1) + outerPrefix + marker.Continuation;
+        var caret = _editor.CaretOffset;
+        _editor.Document.Replace(caret, _editor.SelectionLength, insertion);
+        _editor.CaretOffset = caret + insertion.Length;
         return true;
     }
 
-    private void ToggleTask(TextAnchor anchor, bool isChecked)
+    private static Brush CreateFallbackSelectionBrush(Brush accent, Brush surface)
     {
-        if (anchor.IsDeleted) return;
-        var line = _editor.Document.GetLineByOffset(Math.Min(anchor.Offset, _editor.Document.TextLength));
-        var source = _editor.Document.GetText(line.Offset, line.Length);
-        var match = TaskLine.Match(source);
-        if (!match.Success) return;
-        var markerStart = line.Offset + match.Groups[1].Length + 2;
-        if (markerStart + 1 >= _editor.Document.TextLength) return;
-
-        _editor.Document.BeginUpdate();
-        try
-        {
-            _editor.Document.Replace(markerStart + 1, 1, isChecked ? "x" : " ");
-        }
-        finally
-        {
-            _editor.Document.EndUpdate();
-        }
-        RaiseChanged();
+        if (accent is not SolidColorBrush accentBrush || surface is not SolidColorBrush surfaceBrush) return accent;
+        var background = surfaceBrush.Color;
+        if ((0.2126 * background.R + 0.7152 * background.G + 0.0722 * background.B) / 255 < .5) return accent;
+        var color = accentBrush.Color;
+        return new SolidColorBrush(Color.FromRgb(Blend(background.R, color.R), Blend(background.G, color.G), Blend(background.B, color.B)));
     }
 
-    private void RemoveImage(TextAnchor anchor, int sourceLength)
-    {
-        if (anchor.IsDeleted) return;
-        var line = _editor.Document.GetLineByOffset(Math.Min(anchor.Offset, _editor.Document.TextLength));
-        if (line.Length != sourceLength || !ImageLine.IsMatch(_editor.Document.GetText(line.Offset, line.Length))) return;
-
-        var start = line.Offset;
-        var length = line.Length;
-        if (line.NextLine is not null)
-        {
-            length += line.DelimiterLength;
-        }
-        else if (line.PreviousLine is not null)
-        {
-            start -= line.PreviousLine.DelimiterLength;
-            length += line.PreviousLine.DelimiterLength;
-        }
-
-        _editor.Document.BeginUpdate();
-        try
-        {
-            _editor.Document.Remove(start, length);
-        }
-        finally
-        {
-            _editor.Document.EndUpdate();
-        }
-        _editor.CaretOffset = Math.Min(start, _editor.Document.TextLength);
-        _editor.Focus();
-        RaiseChanged();
-    }
-
-    private void RaiseChanged()
-    {
-        if (!_loading) ContentChanged?.Invoke(this, EventArgs.Empty);
-    }
-
-    private sealed class MarkdownVisualGenerator : VisualLineElementGenerator
-    {
-        private readonly MarkdownBlockEditor _owner;
-
-        public MarkdownVisualGenerator(MarkdownBlockEditor owner) => _owner = owner;
-
-        public override int GetFirstInterestedOffset(int startOffset)
-        {
-            var document = CurrentContext.Document;
-            for (var line = CurrentContext.VisualLine.FirstDocumentLine;
-                 line is not null && line.LineNumber <= CurrentContext.VisualLine.LastDocumentLine.LineNumber;
-                 line = line.NextLine)
-            {
-                var source = document.GetText(line.Offset, line.Length);
-                var candidate = PrefixOffset(line, source, out _);
-                if (candidate >= startOffset) return candidate;
-            }
-            return -1;
-        }
-
-        public override VisualLineElement? ConstructElement(int offset)
-        {
-            var document = CurrentContext.Document;
-            if (document.TextLength == 0 || offset < 0 || offset >= document.TextLength) return null;
-            var line = document.GetLineByOffset(offset);
-            var source = document.GetText(line.Offset, line.Length);
-            var candidate = PrefixOffset(line, source, out var kind);
-            if (candidate != offset) return null;
-
-            if (kind == MarkdownLineKind.Image)
-            {
-                var match = ImageLine.Match(source);
-                if (!match.Success) return null;
-                var anchor = document.CreateAnchor(line.Offset);
-                anchor.SurviveDeletion = true;
-                return new InlineObjectElement(line.Length, _owner.CreateImageHost(anchor, line.Length, match.Groups[1].Value, match.Groups[2].Value));
-            }
-
-            if (kind == MarkdownLineKind.Task)
-            {
-                var match = TaskLine.Match(source);
-                if (!match.Success) return null;
-                var anchor = document.CreateAnchor(line.Offset);
-                anchor.SurviveDeletion = true;
-                var checkbox = _owner.CreateTaskCheckBox(anchor, match.Groups[2].Value.Equals("x", StringComparison.OrdinalIgnoreCase));
-                var markerLength = match.Groups[0].Length - match.Groups[3].Length;
-                return new InlineObjectElement(markerLength, checkbox);
-            }
-
-            if (kind == MarkdownLineKind.Bullet)
-            {
-                var match = BulletLine.Match(source);
-                if (!match.Success) return null;
-                var markerLength = match.Groups[0].Length - match.Groups[2].Length;
-                return new InlineObjectElement(markerLength, new TextBlock
-                {
-                    Text = "• ",
-                    Foreground = _owner._foreground,
-                    FontWeight = FontWeights.SemiBold,
-                    FontFamily = _owner._fontFamily,
-                    FontSize = 14,
-                    VerticalAlignment = VerticalAlignment.Center
-                });
-            }
-
-            if (kind is MarkdownLineKind.Heading1 or MarkdownLineKind.Heading2 or MarkdownLineKind.Heading3)
-            {
-                var match = HeadingLine.Match(source);
-                if (!match.Success) return null;
-                var markerLength = match.Groups[0].Length - match.Groups[3].Length;
-                return new InlineObjectElement(markerLength, new Border
-                {
-                    Width = 0,
-                    Height = 0,
-                    Background = Brushes.Transparent
-                });
-            }
-
-            return null;
-        }
-
-        private static int PrefixOffset(DocumentLine line, string source, out MarkdownLineKind kind)
-        {
-            var image = ImageLine.Match(source);
-            if (image.Success)
-            {
-                kind = MarkdownLineKind.Image;
-                return line.Offset;
-            }
-
-            var task = TaskLine.Match(source);
-            if (task.Success)
-            {
-                kind = MarkdownLineKind.Task;
-                return line.Offset + task.Groups[1].Length;
-            }
-
-            var bullet = BulletLine.Match(source);
-            if (bullet.Success)
-            {
-                kind = MarkdownLineKind.Bullet;
-                return line.Offset + bullet.Groups[1].Length;
-            }
-
-            var heading = HeadingLine.Match(source);
-            if (heading.Success)
-            {
-                kind = heading.Groups[2].Length switch
-                {
-                    1 => MarkdownLineKind.Heading1,
-                    2 => MarkdownLineKind.Heading2,
-                    _ => MarkdownLineKind.Heading3
-                };
-                return line.Offset + heading.Groups[1].Length;
-            }
-
-            kind = MarkdownLineKind.Paragraph;
-            return -1;
-        }
-    }
-
-    private CheckBox CreateTaskCheckBox(TextAnchor anchor, bool isChecked)
-    {
-        var checkbox = new CheckBox
-        {
-            IsChecked = isChecked,
-            Width = 18,
-            Height = 18,
-            Margin = new Thickness(0, 0, 7, -2),
-            VerticalAlignment = VerticalAlignment.Center,
-            Focusable = true,
-            ToolTip = "完成任务",
-            Style = Application.Current?.TryFindResource("ToolkitRoundedCheckBoxStyle") as Style
-        };
-        checkbox.Checked += (_, _) => ToggleTask(anchor, true);
-        checkbox.Unchecked += (_, _) => ToggleTask(anchor, false);
-        return checkbox;
-    }
-
-    private UIElement CreateImageHost(TextAnchor anchor, int sourceLength, string altText, string relativePath)
-    {
-        var host = new Grid { Margin = new Thickness(0, 6, 0, 6), MinHeight = 30 };
-        var image = new Image
-        {
-            Source = _imageLoader(relativePath),
-            MaxHeight = 260,
-            Stretch = Stretch.Uniform,
-            StretchDirection = StretchDirection.DownOnly,
-            HorizontalAlignment = HorizontalAlignment.Stretch,
-            ToolTip = altText
-        };
-        host.Children.Add(image);
-        var remove = new Button
-        {
-            Content = "×",
-            Width = 28,
-            Height = 28,
-            Margin = new Thickness(0, 4, 4, 0),
-            HorizontalAlignment = HorizontalAlignment.Right,
-            VerticalAlignment = VerticalAlignment.Top,
-            Background = _surface,
-            Foreground = _muted,
-            BorderBrush = _line,
-            BorderThickness = new Thickness(1),
-            Padding = new Thickness(0),
-            ToolTip = "删除"
-        };
-        remove.Click += (_, args) =>
-        {
-            args.Handled = true;
-            RemoveImage(anchor, sourceLength);
-        };
-        host.Children.Add(remove);
-        return host;
-    }
-
-    private sealed class MarkdownColorizer : DocumentColorizingTransformer
-    {
-        private readonly Brush _foreground;
-        private readonly Brush _muted;
-        private readonly Brush _accent;
-        private readonly FontFamily _fontFamily;
-
-        public MarkdownColorizer(Brush foreground, Brush muted, Brush accent, FontFamily fontFamily)
-        {
-            _foreground = foreground;
-            _muted = muted;
-            _accent = accent;
-            _fontFamily = fontFamily;
-        }
-
-        protected override void ColorizeLine(DocumentLine line)
-        {
-            var source = CurrentContext.Document.GetText(line.Offset, line.Length);
-            var task = TaskLine.Match(source);
-            if (task.Success)
-            {
-                var markerLength = task.Groups[0].Length - task.Groups[3].Length;
-                ChangeLinePart(line.Offset + markerLength, line.EndOffset, element =>
-                {
-                    if (element.TextRunProperties is not VisualLineElementTextRunProperties properties) return;
-                    properties.SetForegroundBrush(task.Groups[2].Value.Equals("x", StringComparison.OrdinalIgnoreCase) ? _muted : _foreground);
-                    if (task.Groups[2].Value.Equals("x", StringComparison.OrdinalIgnoreCase)) properties.SetTextDecorations(TextDecorations.Strikethrough);
-                });
-                return;
-            }
-
-            var heading = HeadingLine.Match(source);
-            if (heading.Success)
-            {
-                var size = heading.Groups[2].Length switch
-                {
-                    1 => 24d,
-                    2 => 20d,
-                    _ => 17d
-                };
-                ChangeLinePart(line.Offset + heading.Groups[1].Length + heading.Groups[2].Length + 1, line.EndOffset, element =>
-                {
-                    if (element.TextRunProperties is not VisualLineElementTextRunProperties properties) return;
-                    properties.SetForegroundBrush(_foreground);
-                    properties.SetFontRenderingEmSize(size);
-                    properties.SetTypeface(new Typeface(_fontFamily, FontStyles.Normal, FontWeights.SemiBold, FontStretches.Normal));
-                });
-                return;
-            }
-
-            var bullet = BulletLine.Match(source);
-            if (bullet.Success)
-            {
-                ChangeLinePart(line.Offset + bullet.Groups[1].Length + 2, line.EndOffset, element =>
-                {
-                    if (element.TextRunProperties is VisualLineElementTextRunProperties properties)
-                        properties.SetForegroundBrush(_foreground);
-                });
-            }
-        }
-    }
+    private static byte Blend(byte background, byte accent) => (byte)Math.Round(background + (accent - background) * .14);
 }

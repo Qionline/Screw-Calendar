@@ -26,6 +26,14 @@ var tests = new (string Name, Action Run)[]
     ("Backup recovery", TestBackupRecovery),
     ("Version 3 validation", TestValidation),
     ("Markdown documents", TestMarkdownDocuments),
+    ("Markdown semantic boundaries", ScrewCalendar.Tests.MarkdownTests.SemanticBoundaries),
+    ("Markdown bold formatting", ScrewCalendar.Tests.MarkdownTests.BoldFormatting),
+    ("Markdown task baseline alignment", ScrewCalendar.Tests.MarkdownTests.TaskAlignment),
+    ("Markdown reading and source modes", ScrewCalendar.Tests.MarkdownTests.ReadingModes),
+    ("Markdown current-line live editing", ScrewCalendar.Tests.MarkdownTests.LiveEditing),
+    ("Markdown list continuation", ScrewCalendar.Tests.MarkdownTests.ListContinuation),
+    ("Markdown native reading layout", ScrewCalendar.Tests.MarkdownTests.ReadingLayout),
+    ("Markdown link hit testing", ScrewCalendar.Tests.MarkdownTests.LinkHitTesting),
     ("Markdown editor switching", TestMarkdownEditorSwitching),
     ("Markdown editor failed save", TestMarkdownEditorFailedSave),
     ("Normal editor formatting toolbar", TestNormalEditorFormattingToolbar),
@@ -35,7 +43,8 @@ var tests = new (string Name, Action Run)[]
     ("Desktop layer recovery", ScrewCalendar.Tests.WindowLayerTests.DesktopPlacement),
     ("Localization keys", TestLocalizationKeys),
     ("Calendar metadata", TestCalendarMetadata),
-    ("Release metadata", TestReleaseMetadata)
+    ("Release metadata", TestReleaseMetadata),
+    ("Markdown calendar integration", ScrewCalendar.Tests.MarkdownIntegrationTests.Run)
 };
 
 var failures = new List<string>();
@@ -125,14 +134,13 @@ static void TestValidation()
 static void TestMarkdownDocuments()
 {
     const string markdown = "# Today\n\n- [ ] First\n- [x] Second\n- Plain";
-    var lines = MarkdownDocumentService.ParseLines(markdown);
-    Equal(MarkdownLineKind.Heading1, lines[0].Kind, "Heading parsed");
-    Equal(MarkdownLineKind.Task, lines[1].Kind, "Task parsed");
-    True(lines[2].IsChecked, "Completed task parsed");
+    var document = MarkdownDocumentService.Parse(markdown);
+    Equal(1, document.Lines[0].HeadingLevel, "Heading parsed");
+    Equal(2, document.Tasks.Count, "Semantic tasks parsed");
+    True(document.Tasks[1].IsChecked, "Completed task parsed");
     var toggled = MarkdownDocumentService.ToggleTask(markdown, 0, true);
     True(toggled.Contains("- [x] First", StringComparison.Ordinal), "Task state written to Markdown");
-    var roundTrip = MarkdownDocumentService.SerializeLines(lines);
-    True(roundTrip.Contains("# Today", StringComparison.Ordinal), "Visual editor preserves heading");
+    Equal(markdown, document.Source, "Parsing preserves the exact original source");
 }
 
 static void TestMarkdownEditorSwitching()
@@ -377,10 +385,16 @@ static void TestMarkdownImageStore()
                 editor.Arrange(new Rect(0, 0, 640, 480));
                 editor.UpdateLayout();
                 textEditor.TextArea.TextView.EnsureVisualLines();
-                var remove = FindVisualChildren<Button>(editor).SingleOrDefault();
-                True(remove is not null, "Image is rendered as an AvalonEdit inline visual");
-                remove!.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
-                True(!editor.GetMarkdown().Contains(archived, StringComparison.Ordinal), "Image button removes only the source reference line");
+                True(!FindVisualChildren<System.Windows.Controls.Image>(editor).Any(), "Source mode keeps the image reference editable");
+                editor.SetPreviewMode(true);
+                editor.UpdateLayout();
+                textEditor.TextArea.TextView.EnsureVisualLines();
+                True(FindVisualChildren<System.Windows.Controls.Image>(editor).Any(), "Reading mode renders the archived image");
+                editor.SetPreviewMode(false);
+                textEditor.Select(0, textEditor.Document.TextLength);
+                textEditor.SelectedText = string.Empty;
+                True(!editor.GetMarkdown().Contains(archived, StringComparison.Ordinal), "Deleting the source removes the image reference");
+                True(store.Load(archived) is not null, "Removing a reference does not delete the archived bitmap");
             }
             catch (Exception exception) { failure = exception; }
         });
