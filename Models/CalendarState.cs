@@ -25,4 +25,10 @@ public sealed class CalendarState
     public WindowPlacementState Geometry { get; set; } = new() { Left = 80, Top = 80, Width = 980, Height = 890 };
     public string PermanentMarkdown { get; set; } = string.Empty;
     public Dictionary<string, string> DateMarkdown { get; set; } = [];
+    public Dictionary<string, string> RepeatBlocks { get; set; } = [];
+    public Dictionary<string, List<RepeatBlockReference>> DateRepeatReferences { get; set; } = [];
 }
+
+// Offset is a position in the date's local text, excluding shared block sources.
+public sealed record RepeatBlockReference(string Id, int Offset);
+public sealed record RepeatBlockBinding(string Id, int Start, int Length, bool IsProjection = false, int GeneratedSeparatorLength = 0);

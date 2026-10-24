@@ -81,10 +81,15 @@ public sealed class CalendarDataStore
         }
     }
 
-    public CalendarState Import(string path)
+    public CalendarState Import(string path) => ReadValidated(path);
+
+    private static CalendarState ReadValidated(string path)
     {
         var state = Deserialize(File.ReadAllText(path));
         if (state is null || !Validate(state)) throw new InvalidDataException("Calendar data is invalid.");
+        RepeatDocumentService.NormalizeReferences(state);
+        // Moving source anchors can increase the destination's combined document length.
+        if (!Validate(state)) throw new InvalidDataException("Normalized calendar data exceeds storage limits.");
         return state;
     }
 
@@ -103,7 +108,39 @@ public sealed class CalendarDataStore
 
         return state.DateMarkdown.All(item =>
             DateTime.TryParseExact(item.Key, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out _) &&
-            item.Value is not null && item.Value.Length <= CalendarLayout.MaximumMarkdownLength);
+            item.Value is not null && item.Value.Length <= CalendarLayout.MaximumMarkdownLength) && ValidateRepeats(state);
+    }
+
+    private static bool ValidateRepeats(CalendarState state)
+    {
+        if (state.RepeatBlocks is null || state.DateRepeatReferences is null || state.RepeatBlocks.Count > 10000 ||
+            state.DateRepeatReferences.Count > 10000 || state.DateMarkdown.Keys.Union(state.DateRepeatReferences.Keys).Count() > 10000) return false;
+        foreach (var (id, source) in state.RepeatBlocks)
+        {
+            if (!Guid.TryParseExact(id, "N", out _) || source is null || source.Length > CalendarLayout.MaximumMarkdownLength) return false;
+            var parsed = RepeatBlockParser.Parse(source);
+            if (parsed.Count != 1 || parsed[0].Start != 0 || parsed[0].Length != source.Length) return false;
+        }
+        var used = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var (date, references) in state.DateRepeatReferences)
+        {
+            if (!DateTime.TryParseExact(date, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out _) ||
+                references is null || references.Count is 0 or > 10000) return false;
+            var local = state.DateMarkdown.GetValueOrDefault(date, string.Empty);
+            long length = local.Length;
+            var position = 0;
+            var ids = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var reference in references)
+            {
+                if (reference is null || reference.Id is null || !ids.Add(reference.Id) ||
+                    !state.RepeatBlocks.TryGetValue(reference.Id, out var block) || reference.Offset < position || reference.Offset > local.Length) return false;
+                used.Add(reference.Id);
+                position = reference.Offset;
+                length += block.Length;
+            }
+            if (length > CalendarLayout.MaximumMarkdownLength) return false;
+        }
+        return used.Count == state.RepeatBlocks.Count;
     }
 
     public static string Serialize(CalendarState state) => JsonSerializer.Serialize(state, Options);
@@ -115,13 +152,7 @@ public sealed class CalendarDataStore
         if (!File.Exists(path)) return false;
         try
         {
-            var candidate = Deserialize(File.ReadAllText(path));
-            if (!Validate(candidate))
-            {
-                _logError($"Calendar data failed validation: {path}", null);
-                return false;
-            }
-            state = candidate!;
+            state = ReadValidated(path);
             return true;
         }
         catch (Exception exception)

@@ -61,7 +61,7 @@ internal static class MarkdownIntegrationTests
                 native.Document.Insert(native.Document.TextLength, "\n\n未保存的草稿\n");
                 Check(store.Load().PermanentMarkdown == before, "Inline typing does not save the draft");
                 // An external daily preview must not rebuild or discard the permanent draft.
-                SetField(window, "_todayMarkdownPreview", "# 外部草稿\n\n---\n\n- [ ] 新任务");
+                SetField(window, "_todayMarkdownPreview", new CalendarApp::ScrewCalendar.RepeatDocument("# 外部草稿\n\n---\n\n- [ ] 新任务", []));
                 Invoke(window, "RefreshTodayMarkdownPreview");
                 Check(ReferenceEquals(permanent, Field(window, "_permanentSection")) && editor.GetMarkdown().Contains("未保存的草稿", StringComparison.Ordinal), "Daily preview retains an independent inline draft");
                 Invoke(window, "CancelInlineMarkdownEdit", permanent);
@@ -83,9 +83,9 @@ internal static class MarkdownIntegrationTests
                 task.IsChecked = true;
                 Check(store.Load().PermanentMarkdown == saved.Replace("[ ]", "[x]", StringComparison.Ordinal), "Reading task click persists to the isolated data store");
                 var liveReader = Field(window, "_todaySection");
-                SetField(window, "_todayMarkdownPreview", "preview one");
+                SetField(window, "_todayMarkdownPreview", new CalendarApp::ScrewCalendar.RepeatDocument("preview one", []));
                 Invoke(window, "RefreshTodayMarkdownPreview");
-                SetField(window, "_todayMarkdownPreview", "preview two");
+                SetField(window, "_todayMarkdownPreview", new CalendarApp::ScrewCalendar.RepeatDocument("preview two", []));
                 Invoke(window, "RefreshTodayMarkdownPreview");
                 Check(ReferenceEquals(liveReader, Field(window, "_todaySection")) && dailyEditor.GetMarkdown() == "preview two", "Live preview updates reuse the daily section and text control");
                 Check(store.Load().DateMarkdown[key] == state.DateMarkdown[key], "External draft updates never persist implicitly");
@@ -105,7 +105,7 @@ internal static class MarkdownIntegrationTests
                 Check((bool)Invoke(window, "SaveInlineMarkdownEdit", daily)!, "Empty date document saves");
                 Check(!store.Load().DateMarkdown.ContainsKey(key) && !(bool)Field(window, "_todoLayoutHasToday"), "Clearing today's document restores the single-column layout");
                 Check(ReferenceEquals(permanent, Field(window, "_permanentSection")), "Column changes retain the permanent reader");
-                Check((bool)Invoke(window, "TryPersistMarkdown", today, false, state.DateMarkdown[key], null)!, "Restore the date fixture");
+                Check((bool)Invoke(window, "TryPersistMarkdown", today, false, new CalendarApp::ScrewCalendar.RepeatDocument(state.DateMarkdown[key], []), null)!, "Restore the date fixture");
                 Invoke(window, "RenderTodoPanel");
                 var qa = Environment.GetEnvironmentVariable("SCREW_MARKDOWN_QA_DIR");
                 foreach (var style in Enum.GetValues<CalendarApp::ScrewCalendar.CalendarStyle>())
@@ -166,6 +166,133 @@ internal static class MarkdownIntegrationTests
                 Check((bool)Field(window, "_todoEditorActive") && !editor.IsPreviewMode, "Showing the panel restores the retained inline editor");
                 Invoke(window, "CancelInlineMarkdownEdit", permanent);
                 Check(!((bool)Field(window, "_todoEditorActive")), "Save/cancel releases temporary desktop interaction");
+                var dateBeforeRepeat = dailyEditor.GetMarkdown();
+                Invoke(window, "BeginInlineMarkdownEdit", today, false, (int?)dailyNative.Document.TextLength);
+                var dailyTools = Descendants<WrapPanel>((Grid)Property(daily, "Root")).Single().Children.OfType<Button>().ToArray();
+                Check(dailyTools.Length == 6 && Equals(dailyTools[^1].Content, "Rp") && !editor.CanUseRepeat && dailyEditor.CanUseRepeat,
+                    "Only date editing exposes the shared repeat tool");
+                dailyTools[^1].RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+                Check(dailyEditor.GetRepeatDraft().Bindings.Count == 1 && store.Load().RepeatBlocks.Count == 0, "Button registration stays in the unsaved native draft");
+                Invoke(window, "CancelInlineMarkdownEdit", daily);
+                Check(dailyEditor.GetMarkdown() == dateBeforeRepeat && dailyEditor.GetRepeatDraft().Bindings.Count == 0 && store.Load().RepeatBlocks.Count == 0,
+                    "Real inline cancel drops the draft registration and restores its source");
+                Invoke(window, "BeginInlineMarkdownEdit", today, false, (int?)dailyNative.Document.TextLength);
+                dailyTools = Descendants<WrapPanel>((Grid)Property(daily, "Root")).Single().Children.OfType<Button>().ToArray();
+                dailyTools[^1].RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+                dailyNative.SelectedText = "**重复正文**\n- [ ] repeat task\n[重复链接](https://example.com)";
+                dailyNative.Document.Insert(0, "当天上方\n");
+                dailyNative.Document.Insert(dailyNative.Document.TextLength, "\n当天下方");
+                var repeatDraft = dailyEditor.GetRepeatDraft();
+                var repeatId = repeatDraft.Bindings.Single().Id;
+                dailyNative.ScrollToEnd();
+                Layout(root);
+                if (!string.IsNullOrEmpty(qa)) Save(root, qa, "calendar-repeat-inline.png");
+                var dailyRoot = (Grid)Property(daily, "Root");
+                dailyRoot.Width = 145;
+                Layout(root);
+                Check(dailyTools.All(button => button.ActualWidth == 30 && button.ActualHeight == 30), "All six date tools keep square dimensions when wrapping");
+                if (!string.IsNullOrEmpty(qa)) Save(root, qa, "calendar-repeat-inline-narrow.png");
+                dailyRoot.Width = double.NaN;
+                Check((bool)Invoke(window, "SaveInlineMarkdownEdit", daily)!, "Real inline close persists a repeat draft");
+                var storedRepeat = store.Load();
+                Check(storedRepeat.RepeatBlocks.Count == 1 && storedRepeat.DateRepeatReferences[key].Single().Id == repeatId &&
+                    CalendarApp::ScrewCalendar.RepeatDocumentService.Load(storedRepeat, key).Markdown == repeatDraft.Markdown &&
+                    storedRepeat.DateMarkdown[key].Contains("当天上方", StringComparison.Ordinal) && !storedRepeat.DateMarkdown[key].Contains("重复正文", StringComparison.Ordinal),
+                    "Real save persists hidden reference plus independent date text and reopens exact Markdown");
+                dailyNative.ScrollToEnd();
+                Layout(root);
+                Check(Descendants<TextBlock>(dailyEditor).Any(label => label.Text == "周提醒"), "Saving a real date draft switches its repeat tags into a visual header");
+                if (!string.IsNullOrEmpty(qa)) Save(root, qa, "calendar-repeat-reading.png");
+                Descendants<CheckBox>(dailyEditor).Last().IsChecked = true;
+                Check(store.Load().RepeatBlocks[repeatId].Contains("[x] repeat task", StringComparison.Ordinal) && store.Load().RepeatBlocks.Count == 1,
+                    "Reading checkbox changes update shared source while preserving identity");
+                var datePopup = (AppEditor)Invoke(window, "CreateMarkdownEditor", false)!;
+                datePopup.LoadRepeatDocument(today, CalendarApp::ScrewCalendar.RepeatDocumentService.Load(store.Load(), key));
+                var datePopupTools = ((WrapPanel)Invoke(window, "CreateMarkdownFormatTools", datePopup)!).Children.OfType<Button>().ToArray();
+                Check(datePopupTools.Select(button => button.Content).SequenceEqual(dailyTools.Select(button => button.Content)) &&
+                    datePopupTools.All(button => button.Width == 30 && button.Height == 30), "Date popup and inline hosts share the same repeat toolbar");
+                var draftPreview = datePopup.GetRepeatDraft();
+                SetField(window, "_todayMarkdownPreview", draftPreview);
+                Invoke(window, "RefreshTodayMarkdownPreview");
+                dailyNative.ScrollToEnd();
+                Layout(root);
+                Check(dailyEditor.GetRepeatDraft().Bindings.Single().Id == repeatId && Descendants<TextBlock>(dailyEditor).Any(label => label.Text == "周提醒"),
+                    "Popup draft previews preserve hidden bindings and render repeat cards");
+                SetField(window, "_todayMarkdownPreview", null);
+                Invoke(window, "RefreshTodayMarkdownPreview");
+                Invoke(window, "BeginInlineMarkdownEdit", today, false, (int?)0);
+                var closingOffset = dailyEditor.GetMarkdown().LastIndexOf("[/repeat]", StringComparison.Ordinal);
+                dailyNative.Document.Remove(closingOffset, 1);
+                var residual = dailyEditor.GetMarkdown();
+                Check((bool)Invoke(window, "SaveInlineMarkdownEdit", daily)! && store.Load().RepeatBlocks.Count == 0 &&
+                    store.Load().DateRepeatReferences.Count == 0 && store.Load().DateMarkdown[key] == residual,
+                    "Saving damaged repeat tags cleans registration and preserves all remaining text");
+                loaded.DateMarkdown.Remove(key);
+                Check(store.Save(loaded), "Reset isolated today text for a projection-only day");
+                Invoke(window, "RenderTodoPanel");
+                Check(!(bool)Field(window, "_todoLayoutHasToday"), "An empty today starts without a second column");
+                var sourceDate = today.AddDays(-7);
+                var sourceKey = sourceDate.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
+                var futureDate = today.AddDays(7);
+                var futureKey = futureDate.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
+                var seriesId = Guid.NewGuid().ToString("N");
+                var series = $"[repeat type=\"w\" startdate=\"{sourceKey}\" enddate=\"{today.AddDays(14):yyyy-MM-dd}\"]\n**跨日期同步正文**\n- [ ] 同步勾选\n[/repeat]";
+                Check((bool)Invoke(window, "TryPersistMarkdown", sourceDate, false, new CalendarApp::ScrewCalendar.RepeatDocument(series, [new(seriesId, 0, series.Length)]), null)!, "Save an isolated recurring source on a previous date");
+                Invoke(window, "Render");
+                Layout(root);
+                Check((bool)Field(window, "_todoLayoutHasToday") && dailyEditor.GetRepeatDraft().Bindings.Single().IsProjection && !store.Load().DateMarkdown.ContainsKey(key),
+                    "A projected occurrence alone appears in today's area without a stored date document");
+                var dateCells = (System.Collections.Generic.Dictionary<string, Border>)Field(window, "_dateCells");
+                foreach (var dayKey in new[] { sourceKey, key, futureKey })
+                    Check(dateCells.TryGetValue(dayKey, out var cell) && Descendants<TextBlock>(cell).Count(label => label.Text.Contains("跨日期同步正文", StringComparison.Ordinal)) == 1,
+                        "Calendar source and matching dates each render one synchronized summary: " + dayKey);
+                dailyNative.ScrollToHome();
+                Layout(root);
+                Descendants<CheckBox>(dailyEditor).First().IsChecked = true;
+                Check(store.Load().RepeatBlocks[seriesId].Contains("[x] 同步勾选", StringComparison.Ordinal) && !store.Load().DateRepeatReferences.ContainsKey(key),
+                    "Today's projected checkbox changes the shared body without pinning today");
+                Check(((string)Invoke(window, "GetMarkdownDocument", futureDate, false)!).Contains("[x] 同步勾选", StringComparison.Ordinal) &&
+                    Descendants<TextBlock>(dateCells[futureKey]).Any(label => label.Text.Contains("☑", StringComparison.Ordinal)), "Checkbox changes immediately refresh other date summaries");
+                Invoke(window, "BeginInlineMarkdownEdit", today, false, (int?)0);
+                dailyNative.Document.Insert(0, "仅今日顶部\n");
+                dailyNative.Document.Insert(dailyNative.Document.TextLength, "\n仅今日底部");
+                var positioned = dailyEditor.GetMarkdown();
+                Check((bool)Invoke(window, "SaveInlineMarkdownEdit", daily)! && dailyEditor.GetMarkdown() == positioned, "Saving local text preserves the projected block's position and exact separators");
+                var localOnly = store.Load().DateMarkdown[key];
+                Check(localOnly.Contains("仅今日顶部", StringComparison.Ordinal) && localOnly.Contains("仅今日底部", StringComparison.Ordinal) && !localOnly.Contains("跨日期同步正文", StringComparison.Ordinal),
+                    "Only date-local surrounding text is stored in DateMarkdown");
+                var futureDraft = CalendarApp::ScrewCalendar.RepeatDocumentService.Load(store.Load(), futureKey);
+                Check((bool)Invoke(window, "TryPersistMarkdown", futureDate, false,
+                    new CalendarApp::ScrewCalendar.RepeatDocument(futureDraft.Markdown.Replace("同步正文", "更新正文", StringComparison.Ordinal), futureDraft.Bindings), null)!, "Edit shared body from another occurrence date");
+                Invoke(window, "Render");
+                Layout(root);
+                Check(dailyEditor.GetMarkdown() == positioned.Replace("同步正文", "更新正文", StringComparison.Ordinal) && store.Load().DateMarkdown[key] == localOnly &&
+                    !store.Load().DateRepeatReferences.ContainsKey(futureKey), "Shared edits refresh today's view and preserve its independent surrounding text");
+                foreach (var style in Enum.GetValues<CalendarApp::ScrewCalendar.CalendarStyle>())
+                {
+                    loaded.Style = style;
+                    foreach (var theme in Enum.GetValues<CalendarApp::ScrewCalendar.CalendarTheme>())
+                    {
+                        loaded.Theme = theme;
+                        Invoke(window, "Render"); Layout(root);
+                        Check(Descendants<TextBlock>(dateCells[futureKey]).Any(label => label.Text.Contains("跨日期更新正文", StringComparison.Ordinal)), "Projected summaries survive style and theme changes");
+                        if (!string.IsNullOrEmpty(qa)) Save(root, qa, $"calendar-recurrence-{style}-{theme}.png");
+                    }
+                }
+                var limited = CalendarApp::ScrewCalendar.RepeatDocumentService.Load(store.Load(), futureKey);
+                var shortRange = limited.Markdown.Replace(sourceKey, key, StringComparison.Ordinal).Replace(today.AddDays(14).ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture), key, StringComparison.Ordinal);
+                Check((bool)Invoke(window, "TryPersistMarkdown", futureDate, false, new CalendarApp::ScrewCalendar.RepeatDocument(shortRange, limited.Bindings), null)!, "Shorten recurrence range from a projected date");
+                Invoke(window, "Render"); Layout(root);
+                Check(!Descendants<TextBlock>(dateCells[sourceKey]).Any(label => label.Text.Contains("跨日期更新正文", StringComparison.Ordinal)) &&
+                    !Descendants<TextBlock>(dateCells[futureKey]).Any(label => label.Text.Contains("跨日期更新正文", StringComparison.Ordinal)) && dailyEditor.GetRepeatDraft().Bindings.Count == 1,
+                    "Changing date range removes out-of-range calendar occurrences and retains today's valid occurrence");
+                Check(((CalendarApp::ScrewCalendar.RepeatDocument)Invoke(window, "GetRepeatDocument", sourceDate, false)!).Bindings.Count == 0 &&
+                    !store.Load().DateRepeatReferences.ContainsKey(sourceKey) && store.Load().DateRepeatReferences[key].Single().Id == seriesId,
+                    "Out-of-range source editor no longer loads the reminder, whose reference remains on its new start date");
+                var movedEditor = (AppEditor)Invoke(window, "CreateMarkdownEditor", false)!;
+                Invoke(window, "LoadMarkdownEditor", movedEditor, sourceDate, false);
+                Check(movedEditor.GetRepeatDraft().Bindings.Count == 0 && !movedEditor.GetMarkdown().Contains("[repeat", StringComparison.Ordinal),
+                    "Reloading the old date through the app editor path matches its browsing view after a range change");
             }
             catch (Exception exception) { failure = exception; }
             finally

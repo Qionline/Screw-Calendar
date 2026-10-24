@@ -1,4 +1,6 @@
 using System;
+using System.Globalization;
+using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -87,9 +89,10 @@ public sealed partial class MainWindow
             _todaySection = BuildMarkdownSection(_today.Date, false);
         foreach (var section in new[] { _permanentSection, _todaySection })
         {
+            section.Editor.SurfaceOpacity = _state.Opacity;
             section.Editor.UpdateAppearance(Foreground(), Muted(), InputBackground(), Line(), Accent(), MarkdownSelectionBrush());
             section.EmptyHint.Foreground = Muted();
-            if (!section.Editing) section.Editor.UpdateMarkdown(SectionMarkdown(section));
+            if (!section.Editing) RefreshSectionDocument(section);
             ConfigureSectionHeader(section);
             UpdateSectionState(section);
         }
@@ -98,7 +101,14 @@ public sealed partial class MainWindow
 
     private string SectionMarkdown(TodoMarkdownSection section) =>
         !section.Permanent && section.Date == _today.Date && _todayMarkdownPreview is not null
-            ? _todayMarkdownPreview : GetMarkdownDocument(section.Date, section.Permanent);
+            ? _todayMarkdownPreview.Markdown : GetMarkdownDocument(section.Date, section.Permanent);
+
+    private void RefreshSectionDocument(TodoMarkdownSection section)
+    {
+        if (!section.Permanent && section.Date == _today.Date && _todayMarkdownPreview is not null)
+            section.Editor.LoadRepeatDocument(section.Date, _todayMarkdownPreview);
+        else LoadMarkdownEditor(section.Editor, section.Date, section.Permanent);
+    }
 
     // A draft update touches the existing reader. The surrounding panel changes only when
     // today's document transitions between empty/nonempty, or the external editing session changes.
@@ -106,7 +116,7 @@ public sealed partial class MainWindow
     {
         if (!_state.ShowTodoPanel) return;
         if (_todaySection is null || _permanentSection is null) { RenderTodoPanel(); return; }
-        if (!_todaySection.Editing) _todaySection.Editor.UpdateMarkdown(SectionMarkdown(_todaySection));
+        if (!_todaySection.Editing) RefreshSectionDocument(_todaySection);
         UpdateSectionState(_todaySection);
         var hasToday = _todaySection.Editing || !string.IsNullOrWhiteSpace(SectionMarkdown(_todaySection));
         if (hasToday != _todoLayoutHasToday) RebuildTodoColumns();
@@ -148,7 +158,7 @@ public sealed partial class MainWindow
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
         var editor = CreateMarkdownEditor(true);
-        editor.SetMarkdown(GetMarkdownDocument(date, permanent));
+        LoadMarkdownEditor(editor, date, permanent);
         var content = new Grid();
         content.Children.Add(editor);
         var empty = Text(Localization.T(permanent ? "todo.emptyPermanent" : "todo.emptyToday"), 14, Muted());
@@ -164,9 +174,9 @@ public sealed partial class MainWindow
         editor.ContentChanged += (_, _) =>
         {
             if (section.Editing) return; // Closing the editor or Ctrl+S persists the draft.
-            if (!TryPersistMarkdown(section.Date, section.Permanent, editor.GetMarkdown()))
-                editor.UpdateMarkdown(GetMarkdownDocument(section.Date, section.Permanent));
-            else RefreshMarkdownDateCell(section.Date, section.Permanent);
+            if (!SaveMarkdownEditor(section.Date, section.Permanent, editor))
+                LoadMarkdownEditor(editor, section.Date, section.Permanent);
+            else RefreshMarkdownDateCells(section.Permanent);
         };
         editor.PreviewKeyDown += (_, args) =>
         {
@@ -243,6 +253,10 @@ public sealed partial class MainWindow
         _activeInlineSection = section;
         _todoEditorActive = true;
         _windowLayerController.SetInteractive(true);
+        if (!section.Editing)
+        {
+            LoadMarkdownEditor(section.Editor, date, permanent);
+        }
         section.Editor.SetPreviewMode(false, caretOffset);
         ConfigureSectionHeader(section);
         UpdateSectionState(section);
@@ -252,8 +266,8 @@ public sealed partial class MainWindow
 
     private bool SaveInlineMarkdownEdit(TodoMarkdownSection section)
     {
-        if (!TryPersistMarkdown(section.Date, section.Permanent, section.Editor.GetMarkdown())) return false;
-        RefreshMarkdownDateCell(section.Date, section.Permanent);
+        if (!SaveMarkdownEditor(section.Date, section.Permanent, section.Editor)) return false;
+        RefreshMarkdownDateCells(section.Permanent);
         EndInlineMarkdownEdit(section);
         return true;
     }
@@ -261,6 +275,7 @@ public sealed partial class MainWindow
     private void CancelInlineMarkdownEdit(TodoMarkdownSection section)
     {
         section.Editor.DiscardDraft(GetMarkdownDocument(section.Date, section.Permanent));
+        LoadMarkdownEditor(section.Editor, section.Date, section.Permanent);
         EndInlineMarkdownEdit(section);
     }
 
@@ -272,16 +287,22 @@ public sealed partial class MainWindow
         RenderTodoPanel();
     }
 
-    private void RefreshMarkdownDateCell(DateTime date, bool permanent)
+    private void RefreshMarkdownDateCells(bool permanent)
     {
-        if (permanent || !_dateCells.TryGetValue(CalendarMath.Key(date), out var old) || old.Parent is not Panel parent) return;
-        var index = parent.Children.IndexOf(old);
-        var replacement = BuildDateCell(date);
-        Grid.SetRow(replacement, Grid.GetRow(old));
-        Grid.SetColumn(replacement, Grid.GetColumn(old));
-        parent.Children.RemoveAt(index);
-        parent.Children.Insert(index, replacement);
-        _dateCells[CalendarMath.Key(date)] = replacement;
+        if (permanent) return;
+        // Shared body/rule changes can affect every visible date, not just the edited day.
+        foreach (var (key, old) in _dateCells.ToArray())
+        {
+            if (old.Parent is not Panel parent) continue;
+            var day = DateTime.ParseExact(key, "yyyy-MM-dd", CultureInfo.InvariantCulture);
+            var index = parent.Children.IndexOf(old);
+            var replacement = BuildDateCell(day);
+            Grid.SetRow(replacement, Grid.GetRow(old));
+            Grid.SetColumn(replacement, Grid.GetColumn(old));
+            parent.Children.RemoveAt(index);
+            parent.Children.Insert(index, replacement);
+            _dateCells[key] = replacement;
+        }
     }
 
     private void EndTodoEditorInteraction()

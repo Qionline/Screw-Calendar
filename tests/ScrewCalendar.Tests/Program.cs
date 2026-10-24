@@ -16,6 +16,7 @@ using System.Windows.Media.Imaging;
 using System.Xml.Linq;
 using ICSharpCode.AvalonEdit;
 using ScrewCalendar;
+using ClipboardTestAccess = ScrewCalendar.Tests.ClipboardTestAccess;
 
 var tests = new (string Name, Action Run)[]
 {
@@ -39,6 +40,16 @@ var tests = new (string Name, Action Run)[]
     ("Normal editor formatting toolbar", TestNormalEditorFormattingToolbar),
     ("Markdown image selection replacement", TestMarkdownImageSelectionReplacement),
     ("Archived Markdown images", TestMarkdownImageStore),
+    ("Repeat tag parsing", ScrewCalendar.Tests.RepeatTests.Parsing),
+    ("Repeat shared/local persistence", ScrewCalendar.Tests.RepeatTests.Storage),
+    ("Repeat atomic save rollback", ScrewCalendar.Tests.RepeatTests.AtomicSave),
+    ("Repeat editor draft lifecycle", ScrewCalendar.Tests.RepeatTests.EditorLifecycle),
+    ("Repeat native card presentation", ScrewCalendar.Tests.RepeatTests.Presentation),
+    ("Repeat daily weekly monthly schedule", ScrewCalendar.Tests.RepeatRecurrenceTests.Schedule),
+    ("Repeat dynamic date projection", ScrewCalendar.Tests.RepeatRecurrenceTests.Projection),
+    ("Repeat global cleanup and rollback", ScrewCalendar.Tests.RepeatRecurrenceTests.CleanupAndRollback),
+    ("Repeat changed-rule reference cleanup", ScrewCalendar.Tests.RepeatRecurrenceTests.ReferenceCleanup),
+    ("Repeat projected native editing", ScrewCalendar.Tests.RepeatTests.ProjectedEditing),
     ("Widget window styles", ScrewCalendar.Tests.WindowLayerTests.StyleTransitions),
     ("Desktop layer recovery", ScrewCalendar.Tests.WindowLayerTests.DesktopPlacement),
     ("Localization keys", TestLocalizationKeys),
@@ -248,12 +259,12 @@ static void TestNormalEditorFormattingToolbar()
 
             editor.SetMarkdown("- [ ] First\n- [x] Second\n- Plain");
             textEditor = (TextEditor)editor.Child!;
-            var originalClipboard = Clipboard.GetDataObject();
+            var originalClipboard = ClipboardTestAccess.Run(Clipboard.GetDataObject);
             try
             {
                 textEditor.Select(0, textEditor.Document.TextLength);
                 textEditor.Copy();
-                Equal(string.Join("\n", new[] { "- [ ] First", "- [x] Second", "- Plain" }), Clipboard.GetText().Replace("\r\n", "\n", StringComparison.Ordinal), "Copy exports selected Markdown syntax");
+                Equal(string.Join("\n", new[] { "- [ ] First", "- [x] Second", "- Plain" }), ClipboardTestAccess.Run(Clipboard.GetText).Replace("\r\n", "\n", StringComparison.Ordinal), "Copy exports selected Markdown syntax");
 
                 var pasted = new MarkdownBlockEditor(Brushes.Black, Brushes.Gray, Brushes.White, Brushes.LightGray, Brushes.Blue, new FontFamily("Segoe UI"), _ => null);
                 pasted.SetMarkdown(string.Empty);
@@ -263,7 +274,7 @@ static void TestNormalEditorFormattingToolbar()
             }
             finally
             {
-                if (originalClipboard is not null) Clipboard.SetDataObject(originalClipboard);
+                if (originalClipboard is not null) ClipboardTestAccess.Run(() => Clipboard.SetDataObject(originalClipboard));
             }
 
             editor.AddImage("assets/test.png", "test");

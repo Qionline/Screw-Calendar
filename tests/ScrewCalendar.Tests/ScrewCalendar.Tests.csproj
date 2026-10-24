@@ -22,8 +22,13 @@
     <Compile Include="..\..\Calendar\CalendarComponentSizing.cs" Link="Source\CalendarComponentSizing.cs" />
     <Compile Include="..\..\Calendar\MarkdownDocumentService.cs" Link="Source\MarkdownDocumentService.cs" />
     <Compile Include="..\..\Calendar\MarkdownSnapshot.cs" Link="Source\MarkdownSnapshot.cs" />
+    <Compile Include="..\..\Calendar\RepeatBlockParser.cs" Link="Source\RepeatBlockParser.cs" />
+    <Compile Include="..\..\Calendar\RepeatSchedule.cs" Link="Source\RepeatSchedule.cs" />
+    <Compile Include="..\..\Services\RepeatDocumentService.cs" Link="Source\RepeatDocumentService.cs" />
     <Compile Include="..\..\Controls\MarkdownBlockEditor.cs" Link="Source\MarkdownBlockEditor.cs" />
     <Compile Include="..\..\Controls\MarkdownBlockEditor.Presentation.cs" Link="Source\MarkdownBlockEditor.Presentation.cs" />
+    <Compile Include="..\..\Controls\MarkdownBlockEditor.Repeat.cs" Link="Source\MarkdownBlockEditor.Repeat.cs" />
+    <Compile Include="..\..\Controls\MarkdownBlockEditor.RepeatPresentation.cs" Link="Source\MarkdownBlockEditor.RepeatPresentation.cs" />
     <Compile Include="..\..\Services\AppLogger.cs" Link="Source\AppLogger.cs" />
     <Compile Include="..\..\Services\CalendarDataStore.cs" Link="Source\CalendarDataStore.cs" />
     <Compile Include="..\..\Services\MarkdownEditorCoordinator.cs" Link="Source\MarkdownEditorCoordinator.cs" />

@@ -34,6 +34,9 @@ public sealed partial class MainWindow
         try
         {
             var imported = _dataStore.Import(dialog.FileName);
+            // Close drafts against their original state before replacing hidden identities.
+            if (_activeInlineSection is not null && !SaveInlineMarkdownEdit(_activeInlineSection)) return;
+            if (!_markdownEditors.TryPrepareToOpen("import")) return;
             _state.Rows = CalendarLayout.ClampRows(imported.Rows);
             _state.Style = imported.Style;
             _state.Theme = imported.Theme;
@@ -46,6 +49,8 @@ public sealed partial class MainWindow
             _state.TodoPanelHeight = imported.TodoPanelHeight;
             _state.PermanentMarkdown = imported.PermanentMarkdown;
             _state.DateMarkdown = imported.DateMarkdown;
+            _state.RepeatBlocks = imported.RepeatBlocks;
+            _state.DateRepeatReferences = imported.DateRepeatReferences;
             Localization.SetLanguage(_state.Language);
             SaveState();
             ApplyVisuals();
