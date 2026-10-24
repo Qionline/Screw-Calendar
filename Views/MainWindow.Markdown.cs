@@ -11,6 +11,16 @@ namespace ScrewCalendar;
 
 public sealed partial class MainWindow
 {
+    private bool TryPersistMarkdown(DateTime date, bool permanent, string markdown, Window? owner = null)
+    {
+        var previous = GetMarkdownDocument(date, permanent);
+        SetMarkdownDocument(date, permanent, markdown);
+        if (_dataStore.Save(_state)) return true;
+        SetMarkdownDocument(date, permanent, previous);
+        System.Windows.MessageBox.Show(owner ?? this, Localization.T("markdown.saveError"), Localization.T("dialog.calendar"), MessageBoxButton.OK, MessageBoxImage.Warning);
+        return false;
+    }
+
     private StackPanel RenderMarkdown(string markdown)
     {
         var panel = new StackPanel();

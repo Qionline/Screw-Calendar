@@ -24,7 +24,7 @@ public sealed partial class MarkdownBlockEditor
         view.BackgroundRenderers.Add(new CodeBackground(this));
         view.SizeChanged += (_, args) =>
         {
-            if (IsPreviewMode && Math.Abs(args.NewSize.Width - args.PreviousSize.Width) > .5) view.Redraw();
+            if (UsesMarkdownPresentation && Math.Abs(args.NewSize.Width - args.PreviousSize.Width) > .5) view.Redraw();
         };
         DataObject.AddCopyingHandler(_editor, (_, args) =>
         {
@@ -38,10 +38,17 @@ public sealed partial class MarkdownBlockEditor
         });
         _editor.PreviewMouseLeftButtonDown += (_, args) =>
         {
-            _previewMouseDown = IsPreviewMode && !IsInteractive(args.OriginalSource) ? args.GetPosition(_editor) : null;
+            var interactive = IsInteractive(args.OriginalSource);
+            _editingMouseDown = !IsPreviewMode && !interactive;
+            _previewMouseDown = IsPreviewMode && !interactive ? args.GetPosition(_editor) : null;
+        };
+        _editor.LostMouseCapture += (_, _) =>
+        {
+            if (!_editor.IsMouseCaptureWithin) EndMouseSelection();
         };
         _editor.AddHandler(UIElement.MouseLeftButtonUpEvent, new MouseButtonEventHandler((_, args) =>
         {
+            EndMouseSelection();
             if (!IsPreviewMode || _previewMouseDown is not { } down) return;
             _previewMouseDown = null;
             var point = args.GetPosition(_editor);
@@ -50,7 +57,7 @@ public sealed partial class MarkdownBlockEditor
             var offset = position.HasValue ? _editor.Document.GetOffset(position.Value.Location) : _editor.Document.TextLength;
             var imageOffset = ImageOffset(args.OriginalSource);
             if (imageOffset.HasValue) offset = imageOffset.Value;
-            var link = Snapshot.Links.FirstOrDefault(item => offset >= item.Start && offset < item.Start + item.Length);
+            var link = HitTestLink(point);
             if (link is not null && Uri.TryCreate(link.Url, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https" or "mailto")
             {
                 try { Process.Start(new ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true }); }
@@ -62,13 +69,43 @@ public sealed partial class MarkdownBlockEditor
         }), handledEventsToo: true);
         _editor.PreviewMouseMove += (_, args) =>
         {
-            if (!IsPreviewMode) return;
-            var position = _editor.GetPositionFromPoint(args.GetPosition(_editor));
-            var offset = position.HasValue ? _editor.Document.GetOffset(position.Value.Location) : -1;
-            var link = Snapshot.Links.FirstOrDefault(item => offset >= item.Start && offset < item.Start + item.Length);
+            if (!IsPreviewMode) { view.Cursor = Cursors.IBeam; view.ToolTip = null; return; }
+            var link = HitTestLink(args.GetPosition(_editor));
             view.Cursor = link is null ? Cursors.IBeam : Cursors.Hand;
             view.ToolTip = link?.Url;
         };
+    }
+
+    internal MarkdownLink? HitTestLink(Point point)
+    {
+        if (!IsPreviewMode) return null;
+        var view = _editor.TextArea.TextView;
+        var viewportPoint = _editor.TranslatePoint(point, view);
+        if (!new Rect(view.RenderSize).Contains(viewportPoint)) return null;
+        view.EnsureVisualLines();
+        var documentPoint = viewportPoint + view.ScrollOffset;
+        var position = view.GetPositionFloor(documentPoint);
+        if (!position.HasValue) return null;
+        var visual = view.GetVisualLine(position.Value.Line);
+        if (visual is null) return null;
+        var column = position.Value.VisualColumn;
+        var textLine = visual.GetTextLineByVisualYPosition(documentPoint.Y);
+        var firstColumn = visual.GetTextLineVisualStartColumn(textLine);
+        if (column < firstColumn || column >= firstColumn + textLine.Length || column >= visual.VisualLength) return null;
+        // Caret hit tests snap empty space to a nearby character. A link requires an
+        // actual rendered character, excluding its hidden brackets and destination.
+        if (visual.Elements.Any(element => element is HiddenSource && column >= element.VisualColumn && column < element.VisualColumn + element.VisualLength)) return null;
+        var offset = visual.FirstDocumentLine.Offset + visual.GetRelativeOffset(column);
+        var link = Snapshot.Links.FirstOrDefault(item => offset >= item.Start && offset < item.Start + item.Length);
+        if (link is null) return null;
+        return textLine.GetTextBounds(column, 1).Any(bounds => bounds.Rectangle.Width > 0 &&
+            documentPoint.X >= bounds.Rectangle.Left && documentPoint.X < bounds.Rectangle.Right) ? link : null;
+    }
+
+    private void EndMouseSelection()
+    {
+        _editingMouseDown = false;
+        RefreshSourceLines();
     }
 
     private static bool IsInteractive(object source)
@@ -121,7 +158,8 @@ public sealed partial class MarkdownBlockEditor
         {
             Height = contentHeight + verticalSpacing * 2,
             Padding = new Thickness(0, verticalSpacing, 0, verticalSpacing),
-            Child = checkbox
+            Child = checkbox,
+            IsHitTestVisible = IsPreviewMode
         };
         TextBlock.SetBaselineOffset(host, verticalSpacing + view.DefaultBaseline + (contentHeight - view.DefaultLineHeight) / 2);
         void Toggle(bool completed)
@@ -160,21 +198,25 @@ public sealed partial class MarkdownBlockEditor
 
         public override int GetFirstInterestedOffset(int startOffset)
         {
-            if (!_owner.IsPreviewMode) return -1;
+            if (!_owner.UsesMarkdownPresentation) return -1;
             var snapshot = _owner.Snapshot;
             var first = snapshot.LineIndexAt(startOffset);
             var last = Math.Min(snapshot.Lines.Count - 1, CurrentContext.VisualLine.LastDocumentLine.LineNumber - 1);
             for (var i = first; i <= last; i++)
+            {
+                if (!_owner.RendersLine(i + 1)) continue;
                 foreach (var replacement in snapshot.Lines[i].Replacements)
                     if (replacement.Start >= startOffset) return replacement.Start;
+            }
             return -1;
         }
 
         public override VisualLineElement? ConstructElement(int offset)
         {
-            if (!_owner.IsPreviewMode) return null;
             var snapshot = _owner.Snapshot;
-            var line = snapshot.Lines[snapshot.LineIndexAt(offset)];
+            var index = snapshot.LineIndexAt(offset);
+            if (!_owner.RendersLine(index + 1)) return null;
+            var line = snapshot.Lines[index];
             var replacement = line.Replacements.FirstOrDefault(item => item.Start == offset);
             if (replacement is null) return null;
             return replacement.Kind switch
@@ -209,7 +251,7 @@ public sealed partial class MarkdownBlockEditor
 
         protected override void ColorizeLine(DocumentLine line)
         {
-            if (!_owner.IsPreviewMode) return;
+            if (!_owner.UsesMarkdownPresentation) return;
             var snapshot = _owner.Snapshot;
             var info = snapshot.Lines[line.LineNumber - 1];
             if (info.HeadingLevel > 0)
@@ -220,7 +262,7 @@ public sealed partial class MarkdownBlockEditor
                 });
             if (info.IsCode)
                 ChangeLinePart(line.Offset, line.EndOffset, element => element.TextRunProperties.SetTypeface(new Typeface(CodeFont, FontStyles.Normal, FontWeights.Normal, FontStretches.Normal)));
-            if (info.IsSyntaxLine)
+            if (info.IsSyntaxLine && _owner.RendersLine(line.LineNumber))
                 ChangeLinePart(line.Offset, line.EndOffset, element => element.TextRunProperties.SetFontRenderingEmSize(1));
             foreach (var task in info.Replacements.Where(item => item.Kind == MarkdownReplacementKind.Task && snapshot.Tasks[item.TaskIndex].IsChecked))
                 ChangeLinePart(task.Start + task.Length, line.EndOffset, element =>
@@ -255,7 +297,7 @@ public sealed partial class MarkdownBlockEditor
         public KnownLayer Layer => KnownLayer.Background;
         public void Draw(TextView textView, DrawingContext drawingContext)
         {
-            if (!_owner.IsPreviewMode || !textView.VisualLinesValid) return;
+            if (!_owner.UsesMarkdownPresentation || !textView.VisualLinesValid) return;
             var snapshot = _owner.Snapshot;
             foreach (var visual in textView.VisualLines)
             {

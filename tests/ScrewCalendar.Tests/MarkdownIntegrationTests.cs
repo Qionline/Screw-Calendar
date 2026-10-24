@@ -72,8 +72,12 @@ internal static class MarkdownIntegrationTests
                 const string saved = "\n# 保存原样\r\n\r\n- [ ] 任务\r\n\r\n---\r\n\n";
                 native.Select(0, native.Document.TextLength);
                 native.SelectedText = saved;
-                Check((bool)Invoke(window, "SaveInlineMarkdownEdit", permanent)!, "Inline save succeeds");
-                Check(store.Load().PermanentMarkdown == saved && editor.GetMarkdown() == saved && editor.IsPreviewMode, "Inline save retains leading/trailing whitespace and returns to the same reader");
+                var permanentHeader = (Grid)((Grid)Property(permanent, "Root")).Children[1];
+                var permanentActions = permanentHeader.Children.OfType<Button>().ToArray();
+                Check(permanentActions.Length == 1 && Equals(permanentActions[0].Content, "×"), "Inline editing exposes only a close action, without a separate save button");
+                permanentActions[0].RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+                Check(store.Load().PermanentMarkdown == saved && editor.GetMarkdown() == saved && editor.IsPreviewMode, "Close automatically saves exact source and returns to the same reader");
+                Check(Field(window, "_activeInlineSection") is null && !(bool)Field(window, "_todoEditorActive"), "Closing releases the active editor and desktop input interaction");
                 Layout(root);
                 var task = Descendants<CheckBox>(editor).First();
                 task.IsChecked = true;
@@ -92,7 +96,8 @@ internal static class MarkdownIntegrationTests
                 var dailyNative = (ICSharpCode.AvalonEdit.TextEditor)dailyEditor.Child!;
                 dailyNative.Select(0, dailyNative.Document.TextLength);
                 dailyNative.SelectedText = " \r\n\r\n";
-                Check((bool)Invoke(window, "SaveInlineMarkdownEdit", daily)!, "Whitespace-only date document saves");
+                var dailyHeader = (Grid)((Grid)Property(daily, "Root")).Children[1];
+                dailyHeader.Children.OfType<Button>().Single().RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
                 Check(store.Load().DateMarkdown[key] == " \r\n\r\n", "Whitespace-only dates also preserve exact source");
                 Invoke(window, "BeginInlineMarkdownEdit", today, false, (int?)0);
                 dailyNative.Select(0, dailyNative.Document.TextLength);
@@ -100,7 +105,7 @@ internal static class MarkdownIntegrationTests
                 Check((bool)Invoke(window, "SaveInlineMarkdownEdit", daily)!, "Empty date document saves");
                 Check(!store.Load().DateMarkdown.ContainsKey(key) && !(bool)Field(window, "_todoLayoutHasToday"), "Clearing today's document restores the single-column layout");
                 Check(ReferenceEquals(permanent, Field(window, "_permanentSection")), "Column changes retain the permanent reader");
-                Check((bool)Invoke(window, "TryPersistMarkdown", today, false, state.DateMarkdown[key])!, "Restore the date fixture");
+                Check((bool)Invoke(window, "TryPersistMarkdown", today, false, state.DateMarkdown[key], null)!, "Restore the date fixture");
                 Invoke(window, "RenderTodoPanel");
                 var qa = Environment.GetEnvironmentVariable("SCREW_MARKDOWN_QA_DIR");
                 foreach (var style in Enum.GetValues<CalendarApp::ScrewCalendar.CalendarStyle>())
@@ -122,11 +127,24 @@ internal static class MarkdownIntegrationTests
                 var sharedToolbar = (WrapPanel)Invoke(window, "CreateMarkdownFormatTools", editor)!;
                 var inlineTools = toolbar.Children.OfType<Button>().ToArray();
                 var popupTools = sharedToolbar.Children.OfType<Button>().ToArray();
-                Check(inlineTools.Length == 5 && popupTools.Length == 5, "Both toolbar hosts expose paragraph, heading, bold, bullet and task tools");
+                var toolOrder = new[] { "MD", "H", "B", "•", "☑" };
+                Check(inlineTools.Select(button => button.Content).SequenceEqual(toolOrder) && popupTools.Select(button => button.Content).SequenceEqual(toolOrder),
+                    "Both toolbar hosts put MD first, followed by heading, bold, bullet and task tools");
                 for (var i = 0; i < inlineTools.Length; i++)
                     Check(inlineTools[i].Width == 30 && inlineTools[i].Height == 30 && inlineTools[i].ActualWidth == inlineTools[i].ActualHeight &&
                         inlineTools[i].Padding == popupTools[i].Padding && inlineTools[i].Margin == popupTools[i].Margin &&
                         ReferenceEquals(inlineTools[i].Template, popupTools[i].Template), "Inline tools use the same fixed square dimensions and template as popup tools");
+                Check(!editor.IsSourceMode, "Inline editing starts with current-line source reveal");
+                var sourceTool = inlineTools.Single(button => Equals(button.Content, "MD"));
+                var beforeMode = editor.GetMarkdown();
+                sourceTool.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+                Check(editor.IsSourceMode && editor.GetMarkdown() == beforeMode, "Inline MD tool exposes full source without rewriting it");
+                sourceTool.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+                var popupEditor = (AppEditor)Invoke(window, "CreateMarkdownEditor", false)!;
+                popupEditor.SetMarkdown("# Popup\n\n- [ ] todo\n---");
+                var popupToolbar = (WrapPanel)Invoke(window, "CreateMarkdownFormatTools", popupEditor)!;
+                popupToolbar.Children.OfType<Button>().Single(button => Equals(button.Content, "MD")).RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+                Check(popupEditor.IsSourceMode && !editor.IsSourceMode, "Popup source fallback operates on its own shared editor instance");
                 native.Select(0, 0);
                 var beforeBold = editor.GetMarkdown();
                 inlineTools.Single(button => Equals(button.Content, "B")).RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));

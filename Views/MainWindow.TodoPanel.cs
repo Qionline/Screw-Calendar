@@ -4,8 +4,6 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using Brushes = System.Windows.Media.Brushes;
-using IOPath = System.IO.Path;
-using Path = System.Windows.Shapes.Path;
 
 namespace ScrewCalendar;
 
@@ -165,7 +163,7 @@ public sealed partial class MainWindow
         editor.EditRequested += offset => BeginInlineMarkdownEdit(date, permanent, offset);
         editor.ContentChanged += (_, _) =>
         {
-            if (section.Editing) return; // A source draft is persisted only by Save.
+            if (section.Editing) return; // Closing the editor or Ctrl+S persists the draft.
             if (!TryPersistMarkdown(section.Date, section.Permanent, editor.GetMarkdown()))
                 editor.UpdateMarkdown(GetMarkdownDocument(section.Date, section.Permanent));
             else RefreshMarkdownDateCell(section.Date, section.Permanent);
@@ -194,26 +192,19 @@ public sealed partial class MainWindow
             header.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             var formats = CreateMarkdownFormatTools(section.Editor);
             header.Children.Add(formats);
-            var actions = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
-            var cancel = FormatToolButton("×", Localization.T("common.cancel"));
-            cancel.Click += (_, _) => CancelInlineMarkdownEdit(section);
-            actions.Children.Add(cancel);
-            var save = IconHeaderButton("M5,3H17L21,7V21H3V3H5M7,5V10H17V5H7M7,14V19H17V14H7Z", Localization.T("markdown.save"), 30, Brushes.White);
-            save.Height = 30;
-            save.Margin = new Thickness(0, 0, 2, 2);
-            save.Background = Accent();
-            save.Click += (_, _) => SaveInlineMarkdownEdit(section);
-            actions.Children.Add(save);
-            Grid.SetColumn(actions, 1);
-            header.Children.Add(actions);
+            var close = FormatToolButton("×", Localization.T("markdown.closeAndSave"));
+            close.HorizontalAlignment = HorizontalAlignment.Right;
+            close.Click += (_, _) => SaveInlineMarkdownEdit(section);
+            Grid.SetColumn(close, 1);
+            header.Children.Add(close);
             header.SizeChanged += (_, _) =>
             {
                 // Wrap/reflow at narrow widths instead of shrinking the format buttons.
                 var narrow = header.ActualWidth < 230;
                 Grid.SetColumnSpan(formats, narrow ? 2 : 1);
-                Grid.SetRow(actions, narrow ? 1 : 0);
-                Grid.SetColumn(actions, narrow ? 0 : 1);
-                Grid.SetColumnSpan(actions, narrow ? 2 : 1);
+                Grid.SetRow(close, narrow ? 1 : 0);
+                Grid.SetColumn(close, narrow ? 0 : 1);
+                Grid.SetColumnSpan(close, narrow ? 2 : 1);
             };
         }
         else
@@ -262,35 +253,23 @@ public sealed partial class MainWindow
     private bool SaveInlineMarkdownEdit(TodoMarkdownSection section)
     {
         if (!TryPersistMarkdown(section.Date, section.Permanent, section.Editor.GetMarkdown())) return false;
-        section.Editor.SetPreviewMode(true);
-        _activeInlineSection = null;
-        EndTodoEditorInteraction();
-        ConfigureSectionHeader(section);
-        UpdateSectionState(section);
         RefreshMarkdownDateCell(section.Date, section.Permanent);
-        RenderTodoPanel();
+        EndInlineMarkdownEdit(section);
         return true;
     }
 
     private void CancelInlineMarkdownEdit(TodoMarkdownSection section)
     {
         section.Editor.DiscardDraft(GetMarkdownDocument(section.Date, section.Permanent));
+        EndInlineMarkdownEdit(section);
+    }
+
+    private void EndInlineMarkdownEdit(TodoMarkdownSection section)
+    {
         section.Editor.SetPreviewMode(true);
         _activeInlineSection = null;
         EndTodoEditorInteraction();
-        ConfigureSectionHeader(section);
-        UpdateSectionState(section);
         RenderTodoPanel();
-    }
-
-    private bool TryPersistMarkdown(DateTime date, bool permanent, string markdown)
-    {
-        var previous = GetMarkdownDocument(date, permanent);
-        SetMarkdownDocument(date, permanent, markdown);
-        if (_dataStore.Save(_state)) return true;
-        SetMarkdownDocument(date, permanent, previous);
-        System.Windows.MessageBox.Show(this, Localization.T("markdown.saveError"), Localization.T("dialog.calendar"), MessageBoxButton.OK, MessageBoxImage.Warning);
-        return false;
     }
 
     private void RefreshMarkdownDateCell(DateTime date, bool permanent)
@@ -321,13 +300,6 @@ public sealed partial class MainWindow
         button.Background = Brushes.Transparent;
         button.BorderThickness = new Thickness(0);
         button.Foreground = Accent();
-        return button;
-    }
-
-    private Button IconHeaderButton(string geometry, string toolTip, double width, Brush fill)
-    {
-        var button = HeaderActionButton(string.Empty, toolTip, width);
-        button.Content = new Path { Data = Geometry.Parse(geometry), Fill = fill, Stretch = Stretch.Uniform, Width = 15, Height = 15 };
         return button;
     }
 }

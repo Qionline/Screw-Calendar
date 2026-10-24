@@ -14,7 +14,6 @@ namespace ScrewCalendar;
 public sealed partial class MarkdownBlockEditor : Border
 {
     private readonly TextEditor _editor;
-    private Brush _foreground;
     private Brush _muted;
     private Brush _surface;
     private Brush _line;
@@ -25,11 +24,13 @@ public sealed partial class MarkdownBlockEditor : Border
     private bool _loading;
     private int _savedSelectionStart;
     private int _savedSelectionLength;
+    private int _firstSourceLine = 1;
+    private int _lastSourceLine = 1;
+    private bool _editingMouseDown;
 
     public MarkdownBlockEditor(Brush foreground, Brush muted, Brush surface, Brush line, Brush accent,
         FontFamily fontFamily, Func<string, BitmapSource?> imageLoader, Brush? selectionBrush = null)
     {
-        _foreground = foreground;
         _muted = muted;
         _surface = surface;
         _line = line;
@@ -72,10 +73,13 @@ public sealed partial class MarkdownBlockEditor : Border
         _editor.TextChanged += (_, _) =>
         {
             _snapshot = null;
-            if (IsPreviewMode) _editor.TextArea.TextView.Redraw();
+            RefreshSourceLines(redraw: false);
+            _editor.TextArea.TextView.Redraw();
             if (!_loading) ContentChanged?.Invoke(this, EventArgs.Empty);
         };
         _editor.PreviewKeyDown += OnEditorKeyDown;
+        _editor.TextArea.Caret.PositionChanged += (_, _) => RefreshSourceLines();
+        _editor.TextArea.SelectionChanged += (_, _) => RefreshSourceLines();
         Child = _editor;
         MouseLeftButtonDown += (_, e) =>
         {
@@ -88,8 +92,41 @@ public sealed partial class MarkdownBlockEditor : Border
     public event EventHandler? ContentChanged;
     public event Action<int>? EditRequested;
     public bool IsPreviewMode { get; private set; }
+    public bool IsSourceMode { get; private set; }
     public bool CanToggleTasks { get; set; } = true;
     public MarkdownSnapshot Snapshot => _snapshot ??= MarkdownDocumentService.Parse(_editor.Text);
+    private bool UsesMarkdownPresentation => IsPreviewMode || !IsSourceMode;
+
+    /// <summary>Full source is a fallback; live editing and reading use the same presentation.</summary>
+    public void SetSourceMode(bool source)
+    {
+        if (source == IsSourceMode) return;
+        IsSourceMode = source;
+        _editor.TextArea.TextView.Redraw();
+    }
+
+    private void RefreshSourceLines(bool redraw = true)
+    {
+        // Keep the hit-test geometry fixed until AvalonEdit has finished a mouse selection.
+        if (_editingMouseDown) return;
+        var start = _editor.SelectionLength > 0 ? _editor.SelectionStart : _editor.CaretOffset;
+        var end = _editor.SelectionLength > 0 ? start + _editor.SelectionLength - 1 : start;
+        var first = _editor.Document.GetLineByOffset(start).LineNumber;
+        var last = _editor.Document.GetLineByOffset(end).LineNumber;
+        if (first == _firstSourceLine && last == _lastSourceLine) return;
+        _firstSourceLine = first;
+        _lastSourceLine = last;
+        if (redraw && !IsPreviewMode && UsesMarkdownPresentation) _editor.TextArea.TextView.Redraw();
+    }
+
+    private bool RendersLine(int lineNumber)
+    {
+        if (IsPreviewMode) return true;
+        if (IsSourceMode || lineNumber >= _firstSourceLine && lineNumber <= _lastSourceLine) return false;
+        var info = Snapshot.Lines[lineNumber - 1];
+        // Complex blocks stay literal while editing in this first live-editing step.
+        return !info.IsCode && !info.Replacements.Any(item => item.Kind == MarkdownReplacementKind.Image);
+    }
 
     public void SetMarkdown(string markdown)
     {
@@ -123,7 +160,6 @@ public sealed partial class MarkdownBlockEditor : Border
 
     public void UpdateAppearance(Brush foreground, Brush muted, Brush surface, Brush line, Brush accent, Brush selection)
     {
-        _foreground = foreground;
         _muted = muted;
         _surface = surface;
         _line = line;
@@ -157,6 +193,7 @@ public sealed partial class MarkdownBlockEditor : Border
             _editor.Select(_editor.CaretOffset, 0);
         }
         IsPreviewMode = preview;
+        _editingMouseDown = false;
         _editor.IsReadOnly = preview;
         _editor.TextArea.Caret.CaretBrush = preview ? Brushes.Transparent : _accent;
         BorderThickness = preview ? new Thickness(0) : new Thickness(1);
@@ -174,6 +211,7 @@ public sealed partial class MarkdownBlockEditor : Border
         {
             var start = Math.Clamp(caretOffset ?? _savedSelectionStart, 0, _editor.Document.TextLength);
             _editor.Select(start, caretOffset.HasValue ? 0 : Math.Min(_savedSelectionLength, _editor.Document.TextLength - start));
+            RefreshSourceLines();
         }
     }
 

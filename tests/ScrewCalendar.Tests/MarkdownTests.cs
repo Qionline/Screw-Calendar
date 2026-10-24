@@ -87,6 +87,96 @@ internal static class MarkdownTests
         Check(!native.Document.UndoStack.CanUndo && editor.GetMarkdown() == "saved", "Discarded drafts cannot return through undo");
     });
 
+    public static void LiveEditing() => InSta(() =>
+    {
+        const string source = "# 标题 **粗体**\r\n正文 **加粗** 与 `code`\r\n- [ ] **任务**\r\n---\r\n```md\r\n- [ ] code\r\n```\r\n![alt](assets/test.png)\r\n最后一行";
+        foreach (var dark in new[] { false, true })
+        {
+            var editor = Create(dark);
+            var native = (TextEditor)editor.Child!;
+            var view = native.TextArea.TextView;
+            using var host = new HwndSource(new HwndSourceParameters("MarkdownLiveEditing") { Width = 420, Height = 700 });
+            var root = new Border { Background = dark ? Brushes.Black : Brushes.White, Padding = new Thickness(12), Child = editor };
+            host.RootVisual = root;
+            editor.SetMarkdown(source);
+            var document = native.Document;
+            var changes = 0;
+            editor.ContentChanged += (_, _) => changes++;
+            void Render() => Layout(root, native, 420, 700);
+            ICSharpCode.AvalonEdit.Rendering.VisualLine Line(int number) => view.VisualLines.Single(line => line.FirstDocumentLine.LineNumber == number);
+            bool HasHidden(int number) => Line(number).Elements.Any(element => element.GetType().Name == "HiddenSource");
+            void CheckLiteral(int number)
+            {
+                var line = Line(number);
+                Check(line.Elements.All(element => element is not ICSharpCode.AvalonEdit.Rendering.InlineObjectElement && element.GetType().Name != "HiddenSource"), "Revealed lines contain actual editable text");
+                for (var offset = 0; offset <= line.FirstDocumentLine.Length; offset++)
+                    Check(line.GetRelativeOffset(line.GetVisualColumn(offset)) == offset, "Every source character remains addressable by the caret");
+            }
+            Render();
+            Check(!editor.IsSourceMode && !editor.IsPreviewMode, "Editing defaults to live presentation");
+            CheckLiteral(1);
+            Check(HasHidden(2) && Visuals<CheckBox>(editor).Count() == 1, "Other text and task lines retain Markdown presentation");
+            Check(Line(1).Elements.Any(element => element.TextRunProperties.FontRenderingEmSize == 24), "Revealing a heading retains its heading size");
+            var headingHeight = Line(1).Height;
+            CheckLiteral(5); CheckLiteral(6); CheckLiteral(7); CheckLiteral(8);
+            Check(!Visuals<Image>(editor).Any(), "Images and code blocks remain source while editing in this step");
+            Visuals<CheckBox>(editor).Single().IsChecked = true;
+            Check(editor.GetMarkdown() == source, "Rendered task controls do not mutate an editing draft");
+            native.CaretOffset = document.GetLineByNumber(3).Offset + 3;
+            Render();
+            CheckLiteral(3);
+            Check(HasHidden(1) && !Visuals<CheckBox>(editor).Any(), "Moving the caret renders the old line and reveals the task markers");
+            Check(Math.Abs(headingHeight - Line(1).Height) < .1, "Heading height stays stable after leaving the line");
+            if (Environment.GetEnvironmentVariable("SCREW_MARKDOWN_QA_DIR") is { Length: > 0 } qa)
+                SaveImage(root, qa, dark ? "live-task-dark.png" : "live-task-light.png", 420, 700);
+            native.CaretOffset = document.GetLineByNumber(4).Offset + 1;
+            Render();
+            CheckLiteral(4);
+            Check(Line(3).Elements.Any(element => element is ICSharpCode.AvalonEdit.Rendering.InlineObjectElement), "Leaving a task restores its checkbox");
+            native.Select(2, document.GetLineByNumber(3).EndOffset - 2);
+            Render();
+            CheckLiteral(1); CheckLiteral(2); CheckLiteral(3);
+            var selection = (native.SelectionStart, native.SelectionLength);
+            editor.SetSourceMode(true); Render();
+            foreach (var line in document.Lines) CheckLiteral(line.LineNumber);
+            editor.SetSourceMode(false); Render();
+            editor.SetPreviewMode(true); Render();
+            Check(Visuals<Image>(editor).Any() && Visuals<CheckBox>(editor).Count() == 1, "Reading still renders complex blocks and tasks");
+            editor.SetPreviewMode(false); Render();
+            Check((native.SelectionStart, native.SelectionLength) == selection && changes == 0 && editor.GetMarkdown() == source,
+                "Revealing, source fallback and reading preserve the selection and never publish text changes");
+            native.Select(0, 0);
+            native.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left) { RoutedEvent = UIElement.PreviewMouseLeftButtonDownEvent });
+            native.CaretOffset = document.GetLineByNumber(3).Offset + 2;
+            Render();
+            Check(Line(3).Elements.Any(element => element is ICSharpCode.AvalonEdit.Rendering.InlineObjectElement), "Mouse selection keeps the previous geometry until release");
+            native.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left) { RoutedEvent = UIElement.MouseLeftButtonUpEvent, Handled = true });
+            Render(); CheckLiteral(3);
+            native.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left) { RoutedEvent = UIElement.PreviewMouseLeftButtonDownEvent });
+            native.CaretOffset = document.GetLineByNumber(4).Offset + 1;
+            Render();
+            native.RaiseEvent(new MouseEventArgs(Mouse.PrimaryDevice, Environment.TickCount) { RoutedEvent = Mouse.LostMouseCaptureEvent });
+            Render(); CheckLiteral(4);
+            native.CaretOffset = document.GetLineByNumber(3).Offset + 2;
+            Render(); CheckLiteral(3);
+            native.Document.Insert(native.CaretOffset, "输入");
+            Render(); CheckLiteral(3);
+            native.Undo(); Render();
+            Check(ReferenceEquals(document, native.Document) && editor.GetMarkdown() == source, "Live editing retains native undo and the same document");
+            native.Select(0, document.TextLength);
+            var originalClipboard = Clipboard.GetDataObject();
+            try { native.Copy(); Check(Clipboard.GetText() == source, "Live editing copies exact Markdown source"); }
+            finally { if (originalClipboard is not null) Clipboard.SetDataObject(originalClipboard); }
+            native.SelectedText = "replacement\n---";
+            Render();
+            Check(editor.GetMarkdown() == "replacement\n---", "Select all and replacement work across rendered blocks");
+            native.Undo(); Render();
+            Check(editor.GetMarkdown() == source, "Replacing a document remains one native undo step");
+            editor.SetMarkdown(""); Render();
+            Check(editor.GetMarkdown() == "", "Empty live documents remain editable");
+        }
+    });
+
     public static void ListContinuation() => InSta(() =>
     {
         var editor = Create();
@@ -227,6 +317,7 @@ internal static class MarkdownTests
             var qa = Environment.GetEnvironmentVariable("SCREW_MARKDOWN_QA_DIR");
             if (!string.IsNullOrEmpty(qa)) SaveImage(background, qa, dark ? "reading-dark.png" : "reading-light.png", 700, 1400);
             editor.SetPreviewMode(false);
+            editor.SetSourceMode(true);
             Layout(background, native, 700, 1400);
             Check(!Visuals<Image>(editor).Any() && !Visuals<CheckBox>(editor).Any(), "Source mode exposes all syntax including images and tasks");
             if (!string.IsNullOrEmpty(qa)) SaveImage(background, qa, dark ? "source-dark.png" : "source-light.png", 700, 1400);
@@ -264,6 +355,71 @@ internal static class MarkdownTests
             dark ? new SolidColorBrush(Color.FromRgb(42, 47, 54)) : new SolidColorBrush(Color.FromRgb(243, 246, 249)),
             dark ? Brushes.DimGray : Brushes.LightGray, Brushes.DodgerBlue, new FontFamily("Segoe UI"), _ => bitmap);
     }
+
+    public static void LinkHitTesting() => InSta(() =>
+    {
+        const string url = "https://act.steamchina.com/2026showcase";
+        const string link = "[2026 鉴赏家新品节](https://act.steamchina.com/2026showcase)";
+        var editor = Create();
+        var native = (TextEditor)editor.Child!;
+        var view = native.TextArea.TextView;
+        using var host = new HwndSource(new HwndSourceParameters("MarkdownLinkHitTesting") { Width = 520, Height = 340 });
+        host.RootVisual = editor;
+        foreach (var source in new[]
+        {
+            link, link + " ", link + " 正文", "正文：" + link, "# " + link, "- [ ] " + link,
+            "[2026 **鉴赏家**新品节](" + url + ")", "[2026 鉴赏家新品节](" + url + " \"节日\")",
+            "[2026 鉴赏家新品节][event]\n\n[event]: " + url,
+            "[另一个链接](https://example.com) " + link,
+            "<" + url + ">",
+            "[2026 鉴赏家新品节 " + string.Concat(Enumerable.Repeat("中文与 English wrapped link text ", 5)) + "结束](" + url + ")"
+        })
+        {
+            editor.SetMarkdown(source);
+            editor.SetPreviewMode(true);
+            foreach (var width in new[] { 520, 220 })
+            {
+                Layout(editor, native, width, 340);
+                var visual = view.VisualLines[0];
+                // Sample real glyphs, including the right half of the last character;
+                // the ordinary caret hit test rounds that half to the next position.
+                var offsets = source.Contains('鉴') ? new[] { source.IndexOf("2026", StringComparison.Ordinal), source.IndexOf('鉴'), source.IndexOf('节') } : new[] { 1, source.IndexOf(')') < 0 ? source.Length - 2 : 2 };
+                foreach (var offset in offsets)
+                {
+                    var column = visual.GetVisualColumn(offset);
+                    var textLine = visual.GetTextLine(column);
+                    var bounds = textLine.GetTextBounds(column, 1).First(bound => bound.Rectangle.Width > 0).Rectangle;
+                    var y = visual.GetTextLineVisualYPosition(textLine, ICSharpCode.AvalonEdit.Rendering.VisualYPosition.LineMiddle) - view.ScrollOffset.Y;
+                    foreach (var fraction in new[] { .1, .5, .9 })
+                        Check(editor.HitTestLink(view.TranslatePoint(new Point(bounds.Left + bounds.Width * fraction, y), native))?.Url == url,
+                            "Visible link text is clickable across its entire glyph: " + source);
+                }
+                foreach (var textLine in visual.TextLines)
+                {
+                    var y = visual.GetTextLineVisualYPosition(textLine, ICSharpCode.AvalonEdit.Rendering.VisualYPosition.LineMiddle) - view.ScrollOffset.Y;
+                    var right = textLine.WidthIncludingTrailingWhitespace + 2;
+                    if (right < view.ActualWidth)
+                        Check(editor.HitTestLink(view.TranslatePoint(new Point(right, y), native)) is null, "Blank space to the right of each wrapped text row is not a link: " + source);
+                }
+                Check(editor.HitTestLink(view.TranslatePoint(new Point(20, visual.Height + 8), native)) is null, "Blank space below the link is not clickable");
+                Check(editor.HitTestLink(new Point(0, 0)) is null, "Editor padding is not a link");
+                Check(editor.GetMarkdown() == source, "Link hit testing never rewrites the source");
+            }
+        }
+        editor.SetMarkdown(string.Concat(Enumerable.Repeat("普通正文\n", 20)) + link);
+        Layout(editor, native, 520, 140);
+        native.ScrollToEnd();
+        Layout(editor, native, 520, 140);
+        var scrolled = view.VisualLines.Last();
+        var lastColumn = scrolled.GetVisualColumn(link.IndexOf('节'));
+        var lastLine = scrolled.GetTextLine(lastColumn);
+        var lastBounds = lastLine.GetTextBounds(lastColumn, 1).Single().Rectangle;
+        var lastY = scrolled.GetTextLineVisualYPosition(lastLine, ICSharpCode.AvalonEdit.Rendering.VisualYPosition.LineMiddle) - view.ScrollOffset.Y;
+        Check(editor.HitTestLink(view.TranslatePoint(new Point(lastBounds.Left + lastBounds.Width / 2, lastY), native))?.Url == url, "Scrolled links use viewport coordinates correctly");
+        Check(editor.HitTestLink(view.TranslatePoint(new Point(view.ActualWidth - 8, lastY), native)) is null, "Scrolled row whitespace is not clickable");
+        editor.SetPreviewMode(false);
+        Check(editor.HitTestLink(view.TranslatePoint(new Point(lastBounds.Left + lastBounds.Width / 2, lastY), native)) is null, "Editing keeps link text editable instead of opening a URL");
+    });
 
     private static void Layout(FrameworkElement root, TextEditor native, double width, double height)
     {

@@ -1,8 +1,6 @@
 using System;
-using System.IO;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Input;
 using System.Windows.Media;
 using Brushes = System.Windows.Media.Brushes;
 using HorizontalAlignment = System.Windows.HorizontalAlignment;
@@ -39,66 +37,39 @@ public sealed partial class MainWindow
         root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
         root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(46) });
 
-        var normalEditor = CreateMarkdownEditor();
-        normalEditor.SetMarkdown(existing);
-        Grid.SetRow(normalEditor, 1); root.Children.Add(normalEditor);
+        var editor = CreateMarkdownEditor();
+        editor.SetMarkdown(existing);
+        Grid.SetRow(editor, 1); root.Children.Add(editor);
 
         if (previewsToday)
         {
             _todayMarkdownPreview = existing;
-            _todayMarkdownPreviewSink = ApplyExternalTodayDraft;
+            _todayMarkdownPreviewSink = editor.UpdateMarkdown;
             RefreshTodayMarkdownPreview();
         }
 
-        normalEditor.ContentChanged += (_, _) =>
-        {
-            PublishTodayPreview();
-        };
+        editor.ContentChanged += (_, _) => PublishTodayPreview();
         var toolbar = new Grid { Margin = new Thickness(0, 0, 0, 5) };
         toolbar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         toolbar.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
-        var formats = CreateMarkdownFormatTools(normalEditor);
+        var formats = CreateMarkdownFormatTools(editor);
         Grid.SetColumn(formats, 0); toolbar.Children.Add(formats);
         var close = DialogCloseButton(dialog, 28, 20, 0, InputBackground());
-        var mode = ToolbarButton(Localization.T("markdown.preview"), Localization.T("markdown.preview"), 64);
-        mode.Click += (_, _) => SetReadingMode(!normalEditor.IsPreviewMode);
-        normalEditor.EditRequested += offset => SetReadingMode(false, offset);
-        var viewActions = new StackPanel { Orientation = Orientation.Horizontal };
-        viewActions.Children.Add(mode);
-        viewActions.Children.Add(close);
-        Grid.SetColumn(viewActions, 1); toolbar.Children.Add(viewActions);
+        Grid.SetColumn(close, 1); toolbar.Children.Add(close);
         Grid.SetRow(toolbar, 0); root.Children.Add(toolbar);
-
-        void SetReadingMode(bool reading, int? offset = null)
-        {
-            normalEditor.SetPreviewMode(reading, offset);
-            formats.IsEnabled = !reading;
-            mode.Content = Localization.T(reading ? "markdown.editSource" : "markdown.preview");
-            mode.ToolTip = mode.Content;
-            if (!reading) normalEditor.FocusEditor();
-        }
 
         void PublishTodayPreview()
         {
             if (!previewsToday) return;
-            _todayMarkdownPreview = normalEditor.GetMarkdown();
+            _todayMarkdownPreview = editor.GetMarkdown();
             if (!previewTimer.IsEnabled) previewTimer.Start();
-        }
-
-        void ApplyExternalTodayDraft(string markdown)
-        {
-            normalEditor.UpdateMarkdown(markdown);
         }
 
         bool SaveAndClose(string markdown)
         {
-            var previous = GetMarkdownDocument(date, permanent);
-            SetMarkdownDocument(date, permanent, markdown);
-            if (!_dataStore.Save(_state))
+            if (!TryPersistMarkdown(date, permanent, markdown, dialog))
             {
-                SetMarkdownDocument(date, permanent, previous);
-                System.Windows.MessageBox.Show(dialog, Localization.T("markdown.saveError"), Localization.T("dialog.calendar"), MessageBoxButton.OK, MessageBoxImage.Warning);
                 dialog.Activate();
                 return false;
             }
@@ -108,7 +79,7 @@ public sealed partial class MainWindow
             return true;
         }
 
-        bool SaveDraftAndClose() => SaveAndClose(normalEditor.GetMarkdown());
+        bool SaveDraftAndClose() => SaveAndClose(editor.GetMarkdown());
 
         var actions = new Grid { VerticalAlignment = VerticalAlignment.Bottom };
         actions.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -156,37 +127,47 @@ public sealed partial class MainWindow
         else _state.DateMarkdown[key] = markdown;
     }
 
-    private Button ToolbarButton(string label, string toolTip, double width)
-    {
-        var button = Button(label, toolTip, width);
-        button.Height = 30;
-        button.Margin = new Thickness(0, 0, 5, 0);
-        button.Padding = new Thickness(4, 0, 4, 0);
-        button.FontSize = label.StartsWith('H') ? 11 : 13;
-        button.Background = InputBackground();
-        return button;
-    }
-
     private WrapPanel CreateMarkdownFormatTools(MarkdownBlockEditor editor)
     {
         var panel = new WrapPanel { HorizontalAlignment = HorizontalAlignment.Left };
-        foreach (var item in new[] { ("T", "markdown.paragraph", MarkdownLineKind.Paragraph), ("H", "markdown.heading2", MarkdownLineKind.Heading2), ("•", "markdown.list", MarkdownLineKind.Bullet), ("☑", "markdown.task", MarkdownLineKind.Task) })
+        var source = FormatToolButton("MD", "");
+        source.FontSize = 10;
+        void RefreshSourceButton()
         {
-            var button = FormatToolButton(item.Item1, Localization.T(item.Item2));
-            button.Click += (_, _) => editor.ApplyKind(item.Item3);
-            panel.Children.Add(button);
+            source.ToolTip = Localization.T(editor.IsSourceMode ? "markdown.liveEditing" : "markdown.fullSource");
+            source.Foreground = editor.IsSourceMode ? Accent() : Foreground();
+            source.FontWeight = editor.IsSourceMode ? FontWeights.Bold : FontWeights.Normal;
         }
+        source.Click += (_, _) =>
+        {
+            editor.SetSourceMode(!editor.IsSourceMode);
+            RefreshSourceButton();
+            editor.FocusEditor();
+        };
+        RefreshSourceButton();
+        panel.Children.Add(source);
+        var heading = FormatToolButton("H", Localization.T("markdown.heading2"));
+        heading.Click += (_, _) => editor.ApplyKind(MarkdownLineKind.Heading2);
+        panel.Children.Add(heading);
         var bold = FormatToolButton("B", Localization.T("markdown.bold"));
         bold.FontWeight = FontWeights.Bold;
         bold.Click += (_, _) => editor.ToggleBold();
-        panel.Children.Insert(2, bold);
+        panel.Children.Add(bold);
+        foreach (var item in new[] { (Label: "•", Key: "markdown.list", Kind: MarkdownLineKind.Bullet), (Label: "☑", Key: "markdown.task", Kind: MarkdownLineKind.Task) })
+        {
+            var button = FormatToolButton(item.Label, Localization.T(item.Key));
+            button.Click += (_, _) => editor.ApplyKind(item.Kind);
+            panel.Children.Add(button);
+        }
         return panel;
     }
 
     private Button FormatToolButton(string label, string toolTip)
     {
-        var button = ToolbarButton(label, toolTip, 30);
+        var button = Button(label, toolTip, 30);
         button.Height = 30;
+        button.FontSize = label == "H" ? 11 : 13;
+        button.Background = InputBackground();
         button.Padding = new Thickness(0);
         button.Margin = new Thickness(0, 0, 2, 2);
         button.HorizontalAlignment = HorizontalAlignment.Left;

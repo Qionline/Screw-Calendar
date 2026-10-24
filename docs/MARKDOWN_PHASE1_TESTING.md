@@ -1,10 +1,10 @@
 # Markdown 第一期验收
 
-本阶段仅做本地验证，不发布远端版本。测试时先通过设置导出 JSON 备份；图片单独保存在本机数据目录的 `assets` 中。
+本文记录第一期 Markdown 的本地验收步骤；当前行源码编辑等后续行为见 [第二期验收](MARKDOWN_PHASE2_TASK1_TESTING.md)。测试时先通过设置导出 JSON 备份；图片单独保存在本机数据目录的 `assets` 中。
 
 ## 打包
 
-使用仓库发布 SDK（.NET 8.0.425），直接执行 `dotnet publish ScrewCalendar.csproj -c Release -o artifacts/publish`。本次只检查本地效果，不运行会创建标签的 `scripts/Release.ps1`。
+使用仓库发布 SDK（.NET 8.0.425），直接执行 `dotnet publish ScrewCalendar.csproj -c Release -o artifacts/publish` 检查本地效果。正式发布和标签推送按 [RELEASING.md](RELEASING.md) 执行。
 
 ## 核心交互
 
