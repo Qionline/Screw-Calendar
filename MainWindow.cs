@@ -79,10 +79,12 @@ public sealed partial class MainWindow : Window
 
     private static readonly string[] WeekdayKeys = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
 
-    public MainWindow()
+    public MainWindow() : this(CalendarDataStore.CreateDefault(), true) { }
+
+    internal MainWindow(CalendarDataStore dataStore, bool initializeDesktopServices)
     {
         _uiFont = (FontFamily)Application.Current.Resources["UiFont"];
-        _dataStore = CalendarDataStore.CreateDefault();
+        _dataStore = dataStore;
         _imageStore = new MarkdownImageStore(_dataStore.AssetsDirectory);
         _metadata = CalendarMetadataService.CreateDefault();
         _holidayUpdates = new HolidayUpdateService(_metadata);
@@ -91,7 +93,7 @@ public sealed partial class MainWindow : Window
             if (!Dispatcher.HasShutdownStarted) Dispatcher.BeginInvoke(Render);
         };
         _state = _dataStore.Load();
-        StartupRegistration.SetEnabled(StartupValueName, _state.StartWithWindows, logError: AppLogger.Error);
+        if (initializeDesktopServices) StartupRegistration.SetEnabled(StartupValueName, _state.StartWithWindows, logError: AppLogger.Error);
         _windowLayerController = new WindowLayerController(this, allowFullscreenCover: true);
         _windowLayerController.SetAlwaysOnTop(_state.Topmost);
         Localization.SetLanguage(_state.Language);
@@ -167,18 +169,18 @@ public sealed partial class MainWindow : Window
         inner.Children.Add(_datesGrid);
 
         _clock.Tick += (_, _) => RefreshToday();
-        _clock.Start();
+        if (initializeDesktopServices) _clock.Start();
         Loaded += (_, _) =>
         {
-            RestoreGeometry();
+            if (initializeDesktopServices) RestoreGeometry();
             Render();
-            CreateTray();
+            if (initializeDesktopServices) CreateTray();
             Visibility = Visibility.Visible;
             WindowState = WindowState.Normal;
             ShowInTaskbar = false;
             if (_state.Topmost) Activate();
             else _windowLayerController.Refresh();
-            _ = _holidayUpdates.RefreshForCalendarYearAsync(_anchor.Year);
+            if (initializeDesktopServices) _ = _holidayUpdates.RefreshForCalendarYearAsync(_anchor.Year);
         };
         LocationChanged += (_, _) => SaveGeometry();
         SizeChanged += (_, _) => SaveGeometry();
@@ -434,7 +436,7 @@ public sealed partial class MainWindow : Window
                 Background = Brushes.Transparent,
                 Cursor = Cursors.Hand,
                 ClipToBounds = true,
-                Child = RenderMarkdown(markdown, true),
+                Child = RenderMarkdown(markdown),
                 ToolTip = Localization.T("markdown.editTooltip")
             };
             preview.MouseLeftButtonDown += (_, eventArgs) =>

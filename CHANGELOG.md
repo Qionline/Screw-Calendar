@@ -6,6 +6,24 @@
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-24
+
+### Changed
+
+- Markdown 默认展开光标／选区所在行的源码，其他普通行保持原生排版；MD 按钮可切换完整源码，复用同一 AvalonEdit 文档并保留撤销、选区和原始空白。
+- 弹窗和底部共用 MD、H、B、列表、任务工具栏，按钮统一为 30×30 正方形，窄栏自动换行；B 和 Ctrl+B 支持切换加粗。
+- 底部待办关闭编辑时自动保存并恢复阅读，保存失败时保留草稿；继续支持 Ctrl+S 保存和 Esc 取消。
+- 统一使用完整 Markdig 语法树和精确源码位置处理六级标题、分隔线、列表、任务、引用、代码、行内格式、链接和本地图片；代码块与图片在编辑中保留源码，阅读时正常渲染。
+- 今日弹窗草稿合并刷新已有阅读控件，保留常驻区的独立草稿；弹窗和底部共用保存与失败回滚逻辑。
+
+### Fixed
+
+- 修复阅读中行末超链接将右侧空白也视为可点击区域的问题，悬停和点击统一按实际链接文字命中。
+- 修复 `---` 紧接正文时被当作标题下划线隐藏的问题，便签阅读中统一显示分隔线，代码块保持原样。
+- 加粗文本使用 Bold 字重，鼠标拖选意外失去捕获后恢复正常的当前行展开。
+- 任务勾选按语法节点定位，只修改对应完成状态，保留换行符并排除代码块中的伪任务。
+- 修复阅读模式任务文字相对复选框偏低的问题，按字体行高和基线对齐，上下各留 2px 间距，并覆盖已完成、加粗及换行任务。
+
 ## [1.0.3] - 2026-10-24
 
 ### Changed
@@ -69,7 +87,8 @@
 - 简体中文和英文界面。
 - 开源仓库规范、自动化回归测试、持续集成和版本发布流程。
 
-[Unreleased]: https://github.com/Qionline/Screw-Calendar/compare/v1.0.3...HEAD
+[Unreleased]: https://github.com/Qionline/Screw-Calendar/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/Qionline/Screw-Calendar/compare/v1.0.3...v1.1.0
 [1.0.3]: https://github.com/Qionline/Screw-Calendar/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/Qionline/Screw-Calendar/releases/tag/v1.0.2
 [1.0.1]: https://github.com/Qionline/Screw-Calendar/releases/tag/v1.0.1
