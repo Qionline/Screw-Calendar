@@ -12,8 +12,6 @@ jobs:
   release:
     runs-on: windows-latest
     timeout-minutes: 20
-    env:
-      DOTNET_INSTALL_DIR: ${{ runner.temp }}/dotnet
 
     steps:
       - uses: actions/checkout@v7
@@ -22,6 +20,8 @@ jobs:
 
       - name: Set up .NET 8
         uses: actions/setup-dotnet@v6
+        env:
+          DOTNET_INSTALL_DIR: ${{ runner.temp }}/dotnet
         with:
           dotnet-version: 8.0.425
 
