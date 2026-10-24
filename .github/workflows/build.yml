@@ -62,7 +62,7 @@ jobs:
           if ($missing) { throw "Missing publish files: $($missing -join ', ')" }
 
       - name: Upload verified package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ScrewCalendar-${{ env.RUNTIME_IDENTIFIER }}
           path: artifacts/publish
