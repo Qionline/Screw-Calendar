@@ -13,6 +13,8 @@ jobs:
   build:
     runs-on: windows-latest
     timeout-minutes: 15
+    env:
+      DOTNET_INSTALL_DIR: ${{ runner.temp }}/dotnet
 
     steps:
       - uses: actions/checkout@v7
@@ -25,6 +27,8 @@ jobs:
       - name: Read project metadata
         shell: pwsh
         run: |
+          $sdkVersion = dotnet --version
+          if ($sdkVersion -ne '8.0.425') { throw "Expected .NET SDK 8.0.425, got $sdkVersion." }
           $runtimeIdentifier = dotnet msbuild .\ScrewCalendar.csproj -getProperty:RuntimeIdentifier
           if ([string]::IsNullOrWhiteSpace($runtimeIdentifier)) { throw "RuntimeIdentifier is not configured." }
           "RUNTIME_IDENTIFIER=$runtimeIdentifier" >> $env:GITHUB_ENV

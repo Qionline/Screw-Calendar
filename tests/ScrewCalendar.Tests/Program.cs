@@ -482,6 +482,9 @@ static void TestReleaseMetadata()
         var workflow = File.ReadAllText(Path.Combine(workflowDirectory, workflowName));
         True(workflow.Contains($"dotnet-version: {releaseSdkVersion}", StringComparison.Ordinal),
             $"{workflowName} must use the locked release SDK {releaseSdkVersion}");
+        True(workflow.Contains("DOTNET_INSTALL_DIR: ${{ runner.temp }}/dotnet", StringComparison.Ordinal) &&
+             workflow.Contains("$sdkVersion = dotnet --version", StringComparison.Ordinal),
+            $"{workflowName} must isolate and verify the actual SDK selected by global.json");
         True(!workflow.Contains("global-json-file: global.json", StringComparison.Ordinal),
             $"{workflowName} must not use the rolling developer SDK policy");
         True(!workflow.Contains("--self-contained", StringComparison.Ordinal) &&
