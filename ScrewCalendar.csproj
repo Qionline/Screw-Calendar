@@ -38,6 +38,9 @@
     <Page Remove="Shared\**\*.xaml" />
   </ItemGroup>
   <ItemGroup>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
+      <_Parameter1>ScrewCalendar.Tests</_Parameter1>
+    </AssemblyAttribute>
     <ProjectReference Include="Shared\DesktopWidgets.Toolkit\DesktopWidgets.Toolkit.csproj" />
     <PackageReference Include="AvalonEdit" />
     <PackageReference Include="Markdig" />

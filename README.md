@@ -52,7 +52,7 @@ Your calendar content stays local. Network access is only used to retrieve publi
 ### Markdown Todos
 
 - Persistent todos and date-based Markdown todos.
-- A visual block editor with headings, lists, and task lists.
+- Markdown source editing and native reading preview with headings, lists, task lists, rules, quotes, code, and inline formatting.
 - Paste or drop images and archive them in local storage.
 - JSON import and export for backup and migration.
 

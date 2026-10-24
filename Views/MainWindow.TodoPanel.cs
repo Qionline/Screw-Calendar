@@ -54,230 +54,255 @@ public sealed partial class MainWindow
         return layer;
     }
 
+    private sealed class TodoMarkdownSection
+    {
+        public required bool Permanent { get; init; }
+        public required DateTime Date { get; init; }
+        public required Grid Root { get; init; }
+        public required MarkdownBlockEditor Editor { get; init; }
+        public required TextBlock EmptyHint { get; init; }
+        public bool Editing => !Editor.IsPreviewMode;
+    }
+
+    private readonly Grid _todoLayout = new();
+    private TodoMarkdownSection? _permanentSection;
+    private TodoMarkdownSection? _todaySection;
+    private TodoMarkdownSection? _activeInlineSection;
+    private bool _todoLayoutHasToday;
+
     private void RenderTodoPanel()
     {
-        EndTodoEditorInteraction();
         var visible = _state.ShowTodoPanel;
         _todoPanel.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
         _todoResizeGrip.Visibility = visible && !_state.Locked ? Visibility.Visible : Visibility.Collapsed;
-        if (!visible)
+        if (!visible) { EndTodoEditorInteraction(); return; }
+        if (_activeInlineSection is { Editing: true } && !_todoEditorActive)
         {
-            _todoPanel.Child = null;
-            return;
+            _todoEditorActive = true;
+            _windowLayerController.SetInteractive(true);
         }
-
         UpdateTodoPanelWidth();
         _todoPanel.Background = new SolidColorBrush(SurfaceColor(_state.Theme == CalendarTheme.Dark ? Color.FromRgb(32, 37, 44) : Color.FromRgb(248, 250, 252)));
         _todoPanel.BorderBrush = Line();
-        var today = _today.Date;
-        var todayMarkdown = _todayMarkdownPreview ?? GetMarkdownDocument(today, false);
-        var todayEditorOpen = _todayMarkdownPreviewSink is not null;
-
-        if (string.IsNullOrWhiteSpace(todayMarkdown))
+        _permanentSection ??= BuildMarkdownSection(_today.Date, true);
+        if (_todaySection is null || _todaySection.Date != _today.Date && !_todaySection.Editing)
+            _todaySection = BuildMarkdownSection(_today.Date, false);
+        foreach (var section in new[] { _permanentSection, _todaySection })
         {
-            _todoPanel.Child = BuildMarkdownSection(
-                Localization.T("todo.permanent"),
-                _state.PermanentMarkdown,
-                today,
-                true,
-                Localization.T("todo.editToday"),
-                !todayEditorOpen);
-            return;
+            section.Editor.UpdateAppearance(Foreground(), Muted(), InputBackground(), Line(), Accent(), MarkdownSelectionBrush());
+            section.EmptyHint.Foreground = Muted();
+            if (!section.Editing) section.Editor.UpdateMarkdown(SectionMarkdown(section));
+            ConfigureSectionHeader(section);
+            UpdateSectionState(section);
         }
+        RebuildTodoColumns();
+    }
 
-        var columns = new Grid();
-        columns.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        columns.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        columns.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        var left = BuildMarkdownSection(Localization.T("todo.permanent"), _state.PermanentMarkdown, today, true);
-        var divider = new Border
+    private string SectionMarkdown(TodoMarkdownSection section) =>
+        !section.Permanent && section.Date == _today.Date && _todayMarkdownPreview is not null
+            ? _todayMarkdownPreview : GetMarkdownDocument(section.Date, section.Permanent);
+
+    // A draft update touches the existing reader. The surrounding panel changes only when
+    // today's document transitions between empty/nonempty, or the external editing session changes.
+    private void RefreshTodayMarkdownPreview()
+    {
+        if (!_state.ShowTodoPanel) return;
+        if (_todaySection is null || _permanentSection is null) { RenderTodoPanel(); return; }
+        if (!_todaySection.Editing) _todaySection.Editor.UpdateMarkdown(SectionMarkdown(_todaySection));
+        UpdateSectionState(_todaySection);
+        var hasToday = _todaySection.Editing || !string.IsNullOrWhiteSpace(SectionMarkdown(_todaySection));
+        if (hasToday != _todoLayoutHasToday) RebuildTodoColumns();
+        ConfigureSectionHeader(_permanentSection);
+    }
+
+    private void RebuildTodoColumns()
+    {
+        if (_permanentSection is null || _todaySection is null) return;
+        _todoLayout.Children.Clear();
+        _todoLayout.ColumnDefinitions.Clear();
+        _todoLayoutHasToday = _todaySection.Editing || !string.IsNullOrWhiteSpace(SectionMarkdown(_todaySection));
+        _todoLayout.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        Grid.SetColumn(_permanentSection.Root, 0);
+        _todoLayout.Children.Add(_permanentSection.Root);
+        if (_todoLayoutHasToday)
         {
-            Width = 1,
-            Margin = new Thickness(12, 4, 12, 4),
-            Background = Line(),
-            Opacity = .7
-        };
-        var right = BuildMarkdownSection(Localization.T("todo.today", FormatDay(today)), todayMarkdown, today, false);
-        Grid.SetColumn(left, 0); columns.Children.Add(left);
-        Grid.SetColumn(divider, 1); columns.Children.Add(divider);
-        if (todayEditorOpen)
-        {
-            right.IsEnabled = false;
-            right.IsHitTestVisible = false;
-            right.Opacity = .58;
+            _todoLayout.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            _todoLayout.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            var divider = new Border { Width = 1, Margin = new Thickness(12, 4, 12, 4), Background = Line(), Opacity = .7 };
+            Grid.SetColumn(divider, 1);
+            _todoLayout.Children.Add(divider);
+            Grid.SetColumn(_todaySection.Root, 2);
+            _todoLayout.Children.Add(_todaySection.Root);
         }
-        Grid.SetColumn(right, 2); columns.Children.Add(right);
-        _todoPanel.Child = columns;
+        ConfigureSectionHeader(_permanentSection);
+        _todoPanel.Child = _todoLayout;
     }
 
     private void UpdateTodoPanelWidth()
     {
         if (_calendarDisplayWidth <= 0) return;
-        _todoPanel.Width = CalendarComponentSizing.TodoPanelWidth(
-            _calendarDisplayWidth,
-            _state.Style == CalendarStyle.Widget);
+        _todoPanel.Width = CalendarComponentSizing.TodoPanelWidth(_calendarDisplayWidth, _state.Style == CalendarStyle.Widget);
     }
 
-    private Grid BuildMarkdownSection(string heading, string markdown, DateTime date, bool permanent, string? secondaryAction = null, bool secondaryActionEnabled = true)
+    private TodoMarkdownSection BuildMarkdownSection(DateTime date, bool permanent)
     {
-        var section = new Grid();
-        section.RowDefinitions.Add(new RowDefinition { Height = new GridLength(34) });
-        section.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-        var header = new Grid();
-        header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        header.Children.Add(Text(heading, 15, FontWeights.SemiBold, Foreground()));
-        var actions = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
-        if (secondaryAction is not null)
+        var root = new Grid();
+        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+        var editor = CreateMarkdownEditor(true);
+        editor.SetMarkdown(GetMarkdownDocument(date, permanent));
+        var content = new Grid();
+        content.Children.Add(editor);
+        var empty = Text(Localization.T(permanent ? "todo.emptyPermanent" : "todo.emptyToday"), 14, Muted());
+        empty.VerticalAlignment = VerticalAlignment.Top;
+        empty.Margin = new Thickness(5, 5, 0, 0);
+        empty.Cursor = Cursors.Hand;
+        content.Children.Add(empty);
+        Grid.SetRow(content, 1);
+        root.Children.Add(content);
+        var section = new TodoMarkdownSection { Permanent = permanent, Date = date, Root = root, Editor = editor, EmptyHint = empty };
+        empty.MouseLeftButtonDown += (_, args) => { args.Handled = true; BeginInlineMarkdownEdit(date, permanent, 0); };
+        editor.EditRequested += offset => BeginInlineMarkdownEdit(date, permanent, offset);
+        editor.ContentChanged += (_, _) =>
         {
-            var today = HeaderActionButton(secondaryAction);
-            today.IsEnabled = secondaryActionEnabled;
-            today.Click += (_, _) => BeginInlineMarkdownEdit(date, false);
-            actions.Children.Add(today);
-        }
-        Grid.SetColumn(actions, 1); header.Children.Add(actions);
-        section.Children.Add(header);
-
-        UIElement content;
-        if (string.IsNullOrWhiteSpace(markdown))
+            if (section.Editing) return; // A source draft is persisted only by Save.
+            if (!TryPersistMarkdown(section.Date, section.Permanent, editor.GetMarkdown()))
+                editor.UpdateMarkdown(GetMarkdownDocument(section.Date, section.Permanent));
+            else RefreshMarkdownDateCell(section.Date, section.Permanent);
+        };
+        editor.PreviewKeyDown += (_, args) =>
         {
-            var empty = new Border
-            {
-                Width = 220,
-                Height = 32,
-                Padding = new Thickness(5, 0, 5, 0),
-                Background = Brushes.Transparent,
-                Cursor = Cursors.Hand,
-                Child = Text(permanent ? Localization.T("todo.emptyPermanent") : Localization.T("todo.emptyToday"), 14, Muted())
-            };
-            empty.MouseLeftButtonDown += (_, e) => { e.Handled = true; BeginInlineMarkdownEdit(date, permanent); };
-            content = empty;
-        }
-        else
-        {
-            var rendered = RenderSelectableMarkdown(markdown, (taskIndex, completed) => ToggleMarkdownTask(date, permanent, taskIndex, completed));
-            rendered.Cursor = Cursors.Hand;
-            rendered.PreviewMouseLeftButtonDown += (_, e) =>
-            {
-                if (IsTodoInteractiveSource(e.OriginalSource)) return;
-                e.Handled = true;
-                BeginInlineMarkdownEdit(date, permanent);
-            };
-            content = rendered;
-        }
-        Grid.SetRow(content, 1); section.Children.Add(content);
+            if (!section.Editing) return;
+            if (args.Key == Key.Escape) { CancelInlineMarkdownEdit(section); args.Handled = true; }
+            else if (args.Key == Key.S && Keyboard.Modifiers == ModifierKeys.Control)
+            { SaveInlineMarkdownEdit(section); args.Handled = true; }
+        };
+        UpdateSectionState(section);
         return section;
     }
 
-    private Button HeaderActionButton(string label, string? toolTip = null, double width = 88)
+    private void ConfigureSectionHeader(TodoMarkdownSection section)
     {
-        var button = Button(label, toolTip ?? label, width);
-        button.Height = 28;
-        button.Margin = new Thickness(5, 0, 0, 0);
-        button.Padding = new Thickness(5, 0, 5, 0);
-        button.Background = Brushes.Transparent;
-        button.BorderThickness = new Thickness(0);
-        button.Foreground = Accent();
-        return button;
+        var old = section.Root.Children.Count > 1 ? section.Root.Children[1] : null;
+        if (old is not null) section.Root.Children.Remove(old);
+        var header = new Grid { MinHeight = 34, Margin = new Thickness(0, 0, 0, 4) };
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        if (section.Editing)
+        {
+            header.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            header.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            var formats = CreateMarkdownFormatTools(section.Editor);
+            header.Children.Add(formats);
+            var actions = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+            var cancel = FormatToolButton("×", Localization.T("common.cancel"));
+            cancel.Click += (_, _) => CancelInlineMarkdownEdit(section);
+            actions.Children.Add(cancel);
+            var save = IconHeaderButton("M5,3H17L21,7V21H3V3H5M7,5V10H17V5H7M7,14V19H17V14H7Z", Localization.T("markdown.save"), 30, Brushes.White);
+            save.Height = 30;
+            save.Margin = new Thickness(0, 0, 2, 2);
+            save.Background = Accent();
+            save.Click += (_, _) => SaveInlineMarkdownEdit(section);
+            actions.Children.Add(save);
+            Grid.SetColumn(actions, 1);
+            header.Children.Add(actions);
+            header.SizeChanged += (_, _) =>
+            {
+                // Wrap/reflow at narrow widths instead of shrinking the format buttons.
+                var narrow = header.ActualWidth < 230;
+                Grid.SetColumnSpan(formats, narrow ? 2 : 1);
+                Grid.SetRow(actions, narrow ? 1 : 0);
+                Grid.SetColumn(actions, narrow ? 0 : 1);
+                Grid.SetColumnSpan(actions, narrow ? 2 : 1);
+            };
+        }
+        else
+        {
+            var title = Text(section.Permanent ? Localization.T("todo.permanent") : Localization.T("todo.today", FormatDay(section.Date)), 15, FontWeights.SemiBold, Foreground());
+            title.TextTrimming = TextTrimming.CharacterEllipsis;
+            header.Children.Add(title);
+            if (section.Permanent && !_todoLayoutHasToday)
+            {
+                var today = HeaderActionButton(Localization.T("todo.editToday"));
+                today.IsEnabled = _todayMarkdownPreviewSink is null;
+                today.Click += (_, _) => BeginInlineMarkdownEdit(_today.Date, false);
+                Grid.SetColumn(today, 1);
+                header.Children.Add(today);
+            }
+        }
+        section.Root.Children.Add(header);
     }
 
-    private void BeginInlineMarkdownEdit(DateTime date, bool permanent)
+    private void UpdateSectionState(TodoMarkdownSection section)
+    {
+        section.EmptyHint.Text = Localization.T(section.Permanent ? "todo.emptyPermanent" : "todo.emptyToday");
+        section.EmptyHint.Visibility = !section.Editing && string.IsNullOrWhiteSpace(section.Editor.GetMarkdown()) ? Visibility.Visible : Visibility.Collapsed;
+        var external = !section.Permanent && section.Date == _today.Date && _todayMarkdownPreviewSink is not null;
+        section.Root.IsEnabled = !external;
+        section.Root.Opacity = external ? .58 : 1;
+        section.Editor.CanToggleTasks = !external;
+    }
+
+    private void BeginInlineMarkdownEdit(DateTime date, bool permanent, int? caretOffset = null)
     {
         if (!permanent && date.Date == _today.Date && _todayMarkdownPreviewSink is not null) return;
+        if (_permanentSection is null || _todaySection is null) RenderTodoPanel();
+        var section = permanent ? _permanentSection! : _todaySection!;
+        if (_activeInlineSection is not null && _activeInlineSection != section && !SaveInlineMarkdownEdit(_activeInlineSection)) return;
+        _activeInlineSection = section;
         _todoEditorActive = true;
         _windowLayerController.SetInteractive(true);
-        var editor = new MarkdownBlockEditor(Foreground(), Muted(), InputBackground(), Line(), Accent(), _uiFont, LoadMarkdownImage, MarkdownSelectionBrush());
-        editor.SetMarkdown(GetMarkdownDocument(date, permanent));
+        section.Editor.SetPreviewMode(false, caretOffset);
+        ConfigureSectionHeader(section);
+        UpdateSectionState(section);
+        if (!permanent && !_todoLayoutHasToday) RebuildTodoColumns();
+        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, new Action(section.Editor.FocusEditor));
+    }
 
-        var host = new Grid();
-        host.RowDefinitions.Add(new RowDefinition { Height = new GridLength(38) });
-        host.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-        var toolbar = new Grid { Margin = new Thickness(0, 0, 0, 7) };
-        toolbar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        toolbar.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        var formats = new StackPanel { Orientation = Orientation.Horizontal };
-        AddFormatButton("T", Localization.T("markdown.paragraph"), MarkdownLineKind.Paragraph);
-        AddFormatButton("H", Localization.T("markdown.heading2"), MarkdownLineKind.Heading2);
-        AddFormatButton("•", Localization.T("markdown.list"), MarkdownLineKind.Bullet);
-        AddFormatButton("☑", Localization.T("markdown.task"), MarkdownLineKind.Task);
-        toolbar.Children.Add(formats);
+    private bool SaveInlineMarkdownEdit(TodoMarkdownSection section)
+    {
+        if (!TryPersistMarkdown(section.Date, section.Permanent, section.Editor.GetMarkdown())) return false;
+        section.Editor.SetPreviewMode(true);
+        _activeInlineSection = null;
+        EndTodoEditorInteraction();
+        ConfigureSectionHeader(section);
+        UpdateSectionState(section);
+        RefreshMarkdownDateCell(section.Date, section.Permanent);
+        RenderTodoPanel();
+        return true;
+    }
 
-        var save = IconHeaderButton(
-            "M5,3H17L21,7V21H3V3H5M7,5V10H17V5H7M7,14V19H17V14H7Z",
-            Localization.T("markdown.save"),
-            32,
-            Brushes.White);
-        save.Background = Accent();
-        save.BorderBrush = Accent();
-        save.Click += (_, _) =>
-        {
-            SetMarkdownDocument(date, permanent, editor.GetMarkdown().Trim());
-            SaveState();
-            Render();
-        };
-        Grid.SetColumn(save, 1); toolbar.Children.Add(save);
-        host.Children.Add(toolbar);
-        Grid.SetRow(editor, 1); host.Children.Add(editor);
+    private void CancelInlineMarkdownEdit(TodoMarkdownSection section)
+    {
+        section.Editor.DiscardDraft(GetMarkdownDocument(section.Date, section.Permanent));
+        section.Editor.SetPreviewMode(true);
+        _activeInlineSection = null;
+        EndTodoEditorInteraction();
+        ConfigureSectionHeader(section);
+        UpdateSectionState(section);
+        RenderTodoPanel();
+    }
 
-        DataObject.AddPastingHandler(editor, PasteImage);
-        editor.PreviewKeyDown += PasteImageShortcut;
-        editor.AllowDrop = true;
-        editor.PreviewDragOver += PreviewImageDragOver;
-        editor.PreviewDrop += DropImages;
+    private bool TryPersistMarkdown(DateTime date, bool permanent, string markdown)
+    {
+        var previous = GetMarkdownDocument(date, permanent);
+        SetMarkdownDocument(date, permanent, markdown);
+        if (_dataStore.Save(_state)) return true;
+        SetMarkdownDocument(date, permanent, previous);
+        System.Windows.MessageBox.Show(this, Localization.T("markdown.saveError"), Localization.T("dialog.calendar"), MessageBoxButton.OK, MessageBoxImage.Warning);
+        return false;
+    }
 
-        _todoPanel.Child = host;
-        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, new Action(editor.FocusEditor));
-
-        void AddFormatButton(string label, string toolTip, MarkdownLineKind kind)
-        {
-            var button = ToolbarButton(label, toolTip, label.Length > 1 ? 38 : 34);
-            button.Margin = new Thickness(0, 0, 3, 0);
-            button.Click += (_, _) => editor.ApplyKind(kind);
-            formats.Children.Add(button);
-        }
-
-        bool InsertClipboardImages()
-        {
-            var images = SaveClipboardImages();
-            foreach (var item in images) editor.AddImage(item.Path, item.AltText);
-            return images.Count > 0;
-        }
-
-        void PasteImage(object sender, DataObjectPastingEventArgs args)
-        {
-            if (!ContainsClipboardImage(args.SourceDataObject) || !InsertClipboardImages()) return;
-            args.CancelCommand();
-        }
-
-        void PasteImageShortcut(object sender, KeyEventArgs args)
-        {
-            if (args.Key == Key.V && (Keyboard.Modifiers & ModifierKeys.Control) != 0 && InsertClipboardImages())
-                args.Handled = true;
-        }
-
-        void PreviewImageDragOver(object sender, DragEventArgs args)
-        {
-            args.Effects = args.Data.GetDataPresent(DataFormats.Bitmap) || DroppedImageFiles(args.Data).Length > 0
-                ? DragDropEffects.Copy
-                : DragDropEffects.None;
-            args.Handled = true;
-        }
-
-        void DropImages(object sender, DragEventArgs args)
-        {
-            var files = DroppedImageFiles(args.Data);
-            foreach (var sourcePath in files)
-            {
-                var storedPath = SaveDroppedImage(sourcePath);
-                if (storedPath is not null) editor.AddImage(storedPath, IOPath.GetFileNameWithoutExtension(sourcePath));
-            }
-            if (files.Length == 0 && args.Data.GetData(DataFormats.Bitmap) is System.Windows.Media.Imaging.BitmapSource bitmap)
-            {
-                var storedPath = SaveDroppedImage(bitmap);
-                if (storedPath is not null) editor.AddImage(storedPath);
-            }
-            args.Handled = true;
-        }
+    private void RefreshMarkdownDateCell(DateTime date, bool permanent)
+    {
+        if (permanent || !_dateCells.TryGetValue(CalendarMath.Key(date), out var old) || old.Parent is not Panel parent) return;
+        var index = parent.Children.IndexOf(old);
+        var replacement = BuildDateCell(date);
+        Grid.SetRow(replacement, Grid.GetRow(old));
+        Grid.SetColumn(replacement, Grid.GetColumn(old));
+        parent.Children.RemoveAt(index);
+        parent.Children.Insert(index, replacement);
+        _dateCells[CalendarMath.Key(date)] = replacement;
     }
 
     private void EndTodoEditorInteraction()
@@ -287,53 +312,22 @@ public sealed partial class MainWindow
         _windowLayerController.SetInteractive(false);
     }
 
-    private Button IconHeaderButton(string geometry, string toolTip, double width, Brush fill)
+    private Button HeaderActionButton(string label, string? toolTip = null, double width = 88)
     {
-        var button = HeaderActionButton(string.Empty, toolTip, width);
-        button.Content = new Path
-        {
-            Data = Geometry.Parse(geometry),
-            Fill = fill,
-            Stretch = Stretch.Uniform,
-            Width = 15,
-            Height = 15
-        };
+        var button = Button(label, toolTip ?? label, width);
+        button.Height = 28;
+        button.Margin = new Thickness(3, 0, 0, 0);
+        button.Padding = new Thickness(2, 0, 2, 0);
+        button.Background = Brushes.Transparent;
+        button.BorderThickness = new Thickness(0);
+        button.Foreground = Accent();
         return button;
     }
 
-    private void ToggleMarkdownTask(DateTime date, bool permanent, int taskIndex, bool completed)
+    private Button IconHeaderButton(string geometry, string toolTip, double width, Brush fill)
     {
-        if (!permanent && date.Date == _today.Date && _todayMarkdownPreviewSink is not null) return;
-        var isTodayPreview = !permanent && date.Date == _today.Date && _todayMarkdownPreview is not null;
-        var markdown = isTodayPreview ? _todayMarkdownPreview! : GetMarkdownDocument(date, permanent);
-        var updated = MarkdownDocumentService.ToggleTask(markdown, taskIndex, completed);
-        if (string.Equals(markdown, updated, StringComparison.Ordinal)) return;
-        if (isTodayPreview)
-        {
-            _todayMarkdownPreview = updated;
-            _todayMarkdownPreviewSink?.Invoke(updated);
-            Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.DataBind, new Action(() =>
-            {
-                if (string.Equals(_todayMarkdownPreview, updated, StringComparison.Ordinal))
-                    RenderTodoPanel();
-            }));
-            return;
-        }
-        SetMarkdownDocument(date, permanent, updated);
-        SaveState();
-        Render();
-    }
-
-    private static bool IsTodoInteractiveSource(object source)
-    {
-        if (source is not DependencyObject current) return false;
-        for (var depth = 0; current is not null && depth < 32; depth++)
-        {
-            if (current is CheckBox or System.Windows.Controls.Button or System.Windows.Controls.Primitives.ScrollBar or System.Windows.Controls.Primitives.Thumb) return true;
-            current = current is Visual or System.Windows.Media.Media3D.Visual3D
-                ? VisualTreeHelper.GetParent(current)
-                : LogicalTreeHelper.GetParent(current);
-        }
-        return false;
+        var button = HeaderActionButton(string.Empty, toolTip, width);
+        button.Content = new Path { Data = Geometry.Parse(geometry), Fill = fill, Stretch = Stretch.Uniform, Width = 15, Height = 15 };
+        return button;
     }
 }

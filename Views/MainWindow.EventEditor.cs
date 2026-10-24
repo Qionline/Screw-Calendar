@@ -16,26 +16,30 @@ public sealed partial class MainWindow
 {
     private void ShowMarkdownEditor(DateTime date, bool permanent, Point? ownerPosition = null)
     {
+        if (_activeInlineSection is not null && !SaveInlineMarkdownEdit(_activeInlineSection)) return;
         var editorKey = permanent ? "permanent" : $"date:{CalendarMath.Key(date)}";
         if (!_markdownEditors.TryPrepareToOpen(editorKey)) return;
 
         var existing = GetMarkdownDocument(date, permanent);
         var dialog = NewEventDialog(string.Empty, ownerPosition);
         var previewsToday = !permanent && date.Date == _today.Date;
+        var previewTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(120) };
+        previewTimer.Tick += (_, _) => { previewTimer.Stop(); RefreshTodayMarkdownPreview(); };
         dialog.Closed += (_, _) =>
         {
+            previewTimer.Stop();
             _markdownEditors.Clear(editorKey);
             if (!previewsToday) return;
             _todayMarkdownPreview = null;
             _todayMarkdownPreviewSink = null;
-            RenderTodoPanel();
+            RefreshTodayMarkdownPreview();
         };
         var root = new Grid();
         root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(40) });
         root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
         root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(46) });
 
-        var normalEditor = new MarkdownBlockEditor(Foreground(), Muted(), InputBackground(), Line(), Accent(), _uiFont, LoadMarkdownImage, MarkdownSelectionBrush());
+        var normalEditor = CreateMarkdownEditor();
         normalEditor.SetMarkdown(existing);
         Grid.SetRow(normalEditor, 1); root.Children.Add(normalEditor);
 
@@ -43,6 +47,7 @@ public sealed partial class MainWindow
         {
             _todayMarkdownPreview = existing;
             _todayMarkdownPreviewSink = ApplyExternalTodayDraft;
+            RefreshTodayMarkdownPreview();
         }
 
         normalEditor.ContentChanged += (_, _) =>
@@ -53,40 +58,37 @@ public sealed partial class MainWindow
         toolbar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         toolbar.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
-        var formats = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Left };
-        AddFormatButton(formats, "T", Localization.T("markdown.paragraph"), MarkdownLineKind.Paragraph);
-        AddFormatButton(formats, "H", Localization.T("markdown.heading2"), MarkdownLineKind.Heading2);
-        AddFormatButton(formats, "•", Localization.T("markdown.list"), MarkdownLineKind.Bullet);
-        AddFormatButton(formats, "☑", Localization.T("markdown.task"), MarkdownLineKind.Task);
+        var formats = CreateMarkdownFormatTools(normalEditor);
         Grid.SetColumn(formats, 0); toolbar.Children.Add(formats);
         var close = DialogCloseButton(dialog, 28, 20, 0, InputBackground());
-        Grid.SetColumn(close, 1); toolbar.Children.Add(close);
+        var mode = ToolbarButton(Localization.T("markdown.preview"), Localization.T("markdown.preview"), 64);
+        mode.Click += (_, _) => SetReadingMode(!normalEditor.IsPreviewMode);
+        normalEditor.EditRequested += offset => SetReadingMode(false, offset);
+        var viewActions = new StackPanel { Orientation = Orientation.Horizontal };
+        viewActions.Children.Add(mode);
+        viewActions.Children.Add(close);
+        Grid.SetColumn(viewActions, 1); toolbar.Children.Add(viewActions);
         Grid.SetRow(toolbar, 0); root.Children.Add(toolbar);
 
-        DataObject.AddPastingHandler(normalEditor, PasteImage);
-        normalEditor.PreviewKeyDown += PasteImageShortcut;
-        normalEditor.AllowDrop = true;
-        normalEditor.PreviewDragOver += PreviewImageDragOver;
-        normalEditor.PreviewDrop += DropImages;
-
-        void AddFormatButton(Panel panel, string label, string toolTip, MarkdownLineKind kind)
+        void SetReadingMode(bool reading, int? offset = null)
         {
-            var button = ToolbarButton(label, toolTip, label.Length > 1 ? 31 : 28);
-            button.Margin = new Thickness(0, 0, 2, 0);
-            button.Click += (_, _) => normalEditor.ApplyKind(kind);
-            panel.Children.Add(button);
+            normalEditor.SetPreviewMode(reading, offset);
+            formats.IsEnabled = !reading;
+            mode.Content = Localization.T(reading ? "markdown.editSource" : "markdown.preview");
+            mode.ToolTip = mode.Content;
+            if (!reading) normalEditor.FocusEditor();
         }
 
         void PublishTodayPreview()
         {
             if (!previewsToday) return;
             _todayMarkdownPreview = normalEditor.GetMarkdown();
-            RenderTodoPanel();
+            if (!previewTimer.IsEnabled) previewTimer.Start();
         }
 
         void ApplyExternalTodayDraft(string markdown)
         {
-            normalEditor.SetMarkdown(markdown);
+            normalEditor.UpdateMarkdown(markdown);
         }
 
         bool SaveAndClose(string markdown)
@@ -106,56 +108,7 @@ public sealed partial class MainWindow
             return true;
         }
 
-        bool SaveDraftAndClose() => SaveAndClose(normalEditor.GetMarkdown().Trim());
-
-        void InsertStoredImage(string path, string altText)
-        {
-            var safeAltText = altText.Replace("[", string.Empty, StringComparison.Ordinal)
-                .Replace("]", string.Empty, StringComparison.Ordinal);
-            normalEditor.AddImage(path, safeAltText);
-        }
-
-        void PasteImage(object sender, DataObjectPastingEventArgs args)
-        {
-            if (!ContainsClipboardImage(args.SourceDataObject)) return;
-            if (!InsertClipboardImages()) return;
-            args.CancelCommand();
-        }
-
-        void PasteImageShortcut(object sender, KeyEventArgs args)
-        {
-            if (args.Key != Key.V || (Keyboard.Modifiers & ModifierKeys.Control) == 0) return;
-            if (InsertClipboardImages()) args.Handled = true;
-        }
-
-        bool InsertClipboardImages()
-        {
-            var images = SaveClipboardImages();
-            foreach (var item in images) InsertStoredImage(item.Path, item.AltText);
-            return images.Count > 0;
-        }
-
-        void PreviewImageDragOver(object sender, DragEventArgs args)
-        {
-            var hasBitmap = args.Data.GetDataPresent(DataFormats.Bitmap);
-            args.Effects = hasBitmap || DroppedImageFiles(args.Data).Length > 0 ? DragDropEffects.Copy : DragDropEffects.None;
-            args.Handled = true;
-        }
-
-        void DropImages(object sender, DragEventArgs args)
-        {
-            foreach (var sourcePath in DroppedImageFiles(args.Data))
-            {
-                var storedPath = SaveDroppedImage(sourcePath);
-                if (storedPath is not null) InsertStoredImage(storedPath, Path.GetFileNameWithoutExtension(sourcePath));
-            }
-            if (DroppedImageFiles(args.Data).Length == 0 && args.Data.GetData(DataFormats.Bitmap) is System.Windows.Media.Imaging.BitmapSource bitmap)
-            {
-                var storedPath = SaveDroppedImage(bitmap);
-                if (storedPath is not null) InsertStoredImage(storedPath, "image");
-            }
-            args.Handled = true;
-        }
+        bool SaveDraftAndClose() => SaveAndClose(normalEditor.GetMarkdown());
 
         var actions = new Grid { VerticalAlignment = VerticalAlignment.Bottom };
         actions.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -199,7 +152,7 @@ public sealed partial class MainWindow
             return;
         }
         var key = CalendarMath.Key(date);
-        if (string.IsNullOrWhiteSpace(markdown)) _state.DateMarkdown.Remove(key);
+        if (markdown.Length == 0) _state.DateMarkdown.Remove(key);
         else _state.DateMarkdown[key] = markdown;
     }
 
@@ -211,6 +164,33 @@ public sealed partial class MainWindow
         button.Padding = new Thickness(4, 0, 4, 0);
         button.FontSize = label.StartsWith('H') ? 11 : 13;
         button.Background = InputBackground();
+        return button;
+    }
+
+    private WrapPanel CreateMarkdownFormatTools(MarkdownBlockEditor editor)
+    {
+        var panel = new WrapPanel { HorizontalAlignment = HorizontalAlignment.Left };
+        foreach (var item in new[] { ("T", "markdown.paragraph", MarkdownLineKind.Paragraph), ("H", "markdown.heading2", MarkdownLineKind.Heading2), ("•", "markdown.list", MarkdownLineKind.Bullet), ("☑", "markdown.task", MarkdownLineKind.Task) })
+        {
+            var button = FormatToolButton(item.Item1, Localization.T(item.Item2));
+            button.Click += (_, _) => editor.ApplyKind(item.Item3);
+            panel.Children.Add(button);
+        }
+        var bold = FormatToolButton("B", Localization.T("markdown.bold"));
+        bold.FontWeight = FontWeights.Bold;
+        bold.Click += (_, _) => editor.ToggleBold();
+        panel.Children.Insert(2, bold);
+        return panel;
+    }
+
+    private Button FormatToolButton(string label, string toolTip)
+    {
+        var button = ToolbarButton(label, toolTip, 30);
+        button.Height = 30;
+        button.Padding = new Thickness(0);
+        button.Margin = new Thickness(0, 0, 2, 2);
+        button.HorizontalAlignment = HorizontalAlignment.Left;
+        button.VerticalAlignment = VerticalAlignment.Top;
         return button;
     }
 

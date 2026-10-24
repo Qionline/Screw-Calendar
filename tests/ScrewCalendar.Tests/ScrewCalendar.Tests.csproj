@@ -5,19 +5,25 @@
     <UseWPF>true</UseWPF>
     <Nullable>enable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
+    <!-- Integration checks load the app's managed WPF assembly; the test host uses the installed runtime. -->
+    <ValidateExecutableReferencesMatchSelfContained>false</ValidateExecutableReferencesMatchSelfContained>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\..\ScrewCalendar.csproj" Aliases="CalendarApp" />
     <ProjectReference Include="..\..\Shared\DesktopWidgets.Toolkit\DesktopWidgets.Toolkit.csproj" />
     <PackageReference Include="AvalonEdit" />
     <PackageReference Include="Markdig" />
     <Compile Include="..\..\Models\CalendarState.cs" Link="Source\CalendarState.cs" />
+    <Compile Include="..\..\Localization.cs" Link="Source\Localization.cs" />
     <Compile Include="..\..\Models\HolidayInfo.cs" Link="Source\HolidayInfo.cs" />
     <Compile Include="..\..\Calendar\CalendarLayout.cs" Link="Source\CalendarLayout.cs" />
     <Compile Include="..\..\Calendar\CalendarRow.cs" Link="Source\CalendarRow.cs" />
     <Compile Include="..\..\Calendar\CalendarMath.cs" Link="Source\CalendarMath.cs" />
     <Compile Include="..\..\Calendar\CalendarComponentSizing.cs" Link="Source\CalendarComponentSizing.cs" />
     <Compile Include="..\..\Calendar\MarkdownDocumentService.cs" Link="Source\MarkdownDocumentService.cs" />
+    <Compile Include="..\..\Calendar\MarkdownSnapshot.cs" Link="Source\MarkdownSnapshot.cs" />
     <Compile Include="..\..\Controls\MarkdownBlockEditor.cs" Link="Source\MarkdownBlockEditor.cs" />
+    <Compile Include="..\..\Controls\MarkdownBlockEditor.Presentation.cs" Link="Source\MarkdownBlockEditor.Presentation.cs" />
     <Compile Include="..\..\Services\AppLogger.cs" Link="Source\AppLogger.cs" />
     <Compile Include="..\..\Services\CalendarDataStore.cs" Link="Source\CalendarDataStore.cs" />
     <Compile Include="..\..\Services\MarkdownEditorCoordinator.cs" Link="Source\MarkdownEditorCoordinator.cs" />
