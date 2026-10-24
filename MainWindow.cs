@@ -73,7 +73,7 @@ public sealed partial class MainWindow : Window
     private Point _todoResizeStart;
     private double _todoResizeHeight;
     private Window? _settingsDialog;
-    private readonly Dictionary<string, Window> _markdownEditorDialogs = new(StringComparer.Ordinal);
+    private readonly MarkdownEditorCoordinator _markdownEditors = new();
     private string? _todayMarkdownPreview;
     private Action<string>? _todayMarkdownPreviewSink;
 

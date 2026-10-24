@@ -26,6 +26,8 @@ var tests = new (string Name, Action Run)[]
     ("Backup recovery", TestBackupRecovery),
     ("Version 3 validation", TestValidation),
     ("Markdown documents", TestMarkdownDocuments),
+    ("Markdown editor switching", TestMarkdownEditorSwitching),
+    ("Markdown editor failed save", TestMarkdownEditorFailedSave),
     ("Normal editor formatting toolbar", TestNormalEditorFormattingToolbar),
     ("Markdown image selection replacement", TestMarkdownImageSelectionReplacement),
     ("Archived Markdown images", TestMarkdownImageStore),
@@ -129,6 +131,79 @@ static void TestMarkdownDocuments()
     True(toggled.Contains("- [x] First", StringComparison.Ordinal), "Task state written to Markdown");
     var roundTrip = MarkdownDocumentService.SerializeLines(lines);
     True(roundTrip.Contains("# Today", StringComparison.Ordinal), "Visual editor preserves heading");
+}
+
+static void TestMarkdownEditorSwitching()
+{
+    WithTemporaryDirectory(path =>
+    {
+        var store = new CalendarDataStore(path);
+        var state = ValidState("Original");
+        True(store.Save(state), "Initial document saved");
+        var coordinator = new MarkdownEditorCoordinator();
+        var events = new List<string>();
+        var draft = "- [ ] Draft when opened";
+        True(coordinator.TryPrepareToOpen("date:2026-09-19"), "First date can open");
+        coordinator.Register("date:2026-09-19", () => events.Add("activate"), () =>
+        {
+            state.DateMarkdown["2026-09-19"] = draft;
+            if (!store.Save(state)) return false;
+            events.Add("saved");
+            coordinator.Clear("date:2026-09-19");
+            events.Add("closed");
+            return true;
+        });
+
+        True(!coordinator.TryPrepareToOpen("date:2026-09-19"), "Same date reuses its editor");
+        Equal("activate", string.Join(",", events), "Same date only activates without saving or closing");
+        Equal("Original", store.Load().DateMarkdown["2026-09-19"], "Same-date activation keeps draft unsaved");
+
+        draft = "# Latest draft\n- [x] Done\n![image](assets/test.png)";
+        events.Clear();
+        True(coordinator.TryPrepareToOpen("date:2026-09-20"), "Another date can open after saving");
+        events.Add("opened next");
+        Equal("saved,closed,opened next", string.Join(",", events), "Save and close finish before opening the next date");
+        Equal(draft, store.Load().DateMarkdown["2026-09-19"], "Switch persists the latest Markdown rather than the opening snapshot");
+
+        var saveCount = 0;
+        coordinator.Register("date:2026-09-20", () => events.Add("activate next"), () => { saveCount++; return true; });
+        coordinator.Clear("date:2026-09-19");
+        True(!coordinator.TryPrepareToOpen("date:2026-09-20"), "An old close notification cannot clear the current editor");
+        coordinator.Clear("date:2026-09-20");
+        True(coordinator.TryPrepareToOpen("date:2026-09-19"), "A manually closed editor does not block reopening");
+        Equal(0, saveCount, "Manual close does not auto-save the cancelled draft");
+    });
+}
+
+static void TestMarkdownEditorFailedSave()
+{
+    WithTemporaryDirectory(path =>
+    {
+        var blockedDirectory = Path.Combine(path, "data");
+        File.WriteAllText(blockedDirectory, "Blocks creation of the data directory");
+        var store = new CalendarDataStore(blockedDirectory, (_, _) => { });
+        var coordinator = new MarkdownEditorCoordinator();
+        var state = ValidState("Draft must survive");
+        var closed = false;
+        var activations = 0;
+        coordinator.Register("date:2026-09-19", () => activations++, () =>
+        {
+            if (!store.Save(state)) return false;
+            closed = true;
+            coordinator.Clear("date:2026-09-19");
+            return true;
+        });
+
+        True(!coordinator.TryPrepareToOpen("date:2026-09-20"), "Disk write failure prevents opening another date");
+        True(!closed, "Failed save keeps the original editor open");
+        True(!coordinator.TryPrepareToOpen("date:2026-09-19"), "Failed save keeps same-date reuse working");
+        Equal(1, activations, "Original editor remains available after a failed save");
+
+        File.Delete(blockedDirectory);
+        True(coordinator.TryPrepareToOpen("date:2026-09-20"), "Switch can be retried after storage recovers");
+        True(closed, "Successful retry closes the original editor");
+        Equal("Draft must survive", store.Load().DateMarkdown["2026-09-19"], "Retry saves the preserved draft");
+    });
 }
 
 static void TestNormalEditorFormattingToolbar()
