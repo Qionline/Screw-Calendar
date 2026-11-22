@@ -6,6 +6,18 @@
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-11-23
+
+### Added
+
+- 每次启动读到有效存档后，在数据目录的 `backups` 子目录保留一份独立的 JSON 副本。新副本写入成功后清理超过 7 天的启动备份。
+
+### Fixed
+
+- 主存档和备份先写入临时文件，确认落盘后再替换。恢复或保存时保留被替换的损坏文件。
+- 主存档无法读取时，依次尝试常规备份、完整的临时文件和有效的启动备份。全部无法读取时暂停窗口位置的自动保存，避免将空白状态写回。
+- 合并窗口移动和缩放过程中连续触发的保存，减少显示器切换时对存档的重复写入。
+
 ## [1.2.0] - 2026-10-25
 
 ### Added
@@ -109,7 +121,8 @@
 - 简体中文和英文界面。
 - 开源仓库规范、自动化回归测试、持续集成和版本发布流程。
 
-[Unreleased]: https://github.com/Qionline/Screw-Calendar/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/Qionline/Screw-Calendar/compare/v1.2.1...HEAD
+[1.2.1]: https://github.com/Qionline/Screw-Calendar/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/Qionline/Screw-Calendar/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/Qionline/Screw-Calendar/compare/v1.0.3...v1.1.0
 [1.0.3]: https://github.com/Qionline/Screw-Calendar/compare/v1.0.2...v1.0.3

@@ -17,8 +17,21 @@ public sealed partial class MainWindow
 
     private void SaveGeometry()
     {
+        _geometrySaveTimer.Stop();
         WindowPlacementService.Capture(this, _state.Geometry);
-        SaveState();
+        if (!_dataStore.NeedsRecovery) SaveState();
+    }
+
+    private void ScheduleGeometrySave()
+    {
+        if (!IsLoaded) return;
+        _geometrySaveTimer.Stop();
+        _geometrySaveTimer.Start();
+    }
+
+    internal void FlushPendingGeometrySave()
+    {
+        if (_geometrySaveTimer.IsEnabled) SaveGeometry();
     }
 
     private void ResizeGripMouseDown(object sender, MouseButtonEventArgs e)

@@ -8,10 +8,15 @@ using System.Text.Json.Serialization;
 
 namespace ScrewCalendar;
 
-public enum CalendarLoadStatus { Default, Primary, Backup }
+public enum CalendarLoadStatus { Default, Primary, Backup, Temporary, StartupBackup }
 
 public sealed class CalendarDataStore
 {
+    private enum SnapshotStatus { Missing, Valid, Corrupt, Unavailable }
+
+    private const string StartupBackupTimestampFormat = "yyyyMMdd'T'HHmmssfffffff'Z'";
+    private static readonly TimeSpan StartupBackupRetention = TimeSpan.FromDays(7);
+
     private static readonly JsonSerializerOptions Options = new()
     {
         WriteIndented = true,
@@ -29,7 +34,9 @@ public sealed class CalendarDataStore
     public string StatePath => Path.Combine(DataDirectory, "calendar.json");
     public string BackupPath => Path.Combine(DataDirectory, "calendar.json.bak");
     public string AssetsDirectory => Path.Combine(DataDirectory, "assets");
+    internal string StartupBackupsDirectory => Path.Combine(DataDirectory, "backups");
     public CalendarLoadStatus LastLoadStatus { get; private set; }
+    internal bool NeedsRecovery { get; private set; }
 
     public static CalendarDataStore CreateDefault()
     {
@@ -37,21 +44,72 @@ public sealed class CalendarDataStore
         return new CalendarDataStore(appData);
     }
 
+    internal CalendarState LoadOnStartup(DateTimeOffset now)
+    {
+        var state = Load();
+        if (LastLoadStatus == CalendarLoadStatus.Default) return state;
+
+        try
+        {
+            Directory.CreateDirectory(StartupBackupsDirectory);
+            var timestamp = now.UtcDateTime.ToString(StartupBackupTimestampFormat, CultureInfo.InvariantCulture);
+            var backupPath = Path.Combine(StartupBackupsDirectory, $"calendar-{timestamp}-{Guid.NewGuid():N}.json");
+            WriteSnapshot(backupPath, Serialize(state), SnapshotStatus.Missing);
+        }
+        catch (Exception exception)
+        {
+            _logError("Failed to create a startup calendar backup.", exception);
+            return state;
+        }
+
+        var cutoff = now.UtcDateTime - StartupBackupRetention;
+        foreach (var (path, createdAt) in GetStartupBackups(out _))
+        {
+            if (createdAt >= cutoff) continue;
+            try { File.Delete(path); }
+            catch (Exception exception) { _logError($"Failed to remove an expired startup calendar backup: {path}", exception); }
+        }
+
+        return state;
+    }
+
     public CalendarState Load()
     {
-        if (TryRead(StatePath, out var primary))
+        NeedsRecovery = false;
+        var primaryStatus = ReadSnapshot(StatePath, out var primary, out _);
+        if (primaryStatus == SnapshotStatus.Valid)
         {
             LastLoadStatus = CalendarLoadStatus.Primary;
             return primary;
         }
 
-        if (TryRead(BackupPath, out var backup))
+        var backupStatus = ReadSnapshot(BackupPath, out var backup, out _);
+        if (backupStatus == SnapshotStatus.Valid)
         {
             LastLoadStatus = CalendarLoadStatus.Backup;
-            RestorePrimaryFromBackup();
+            RestorePrimary(backup, primaryStatus);
             return backup;
         }
 
+        var temporaryStatus = ReadSnapshot(StatePath + ".tmp", out var temporary, out _);
+        if (temporaryStatus == SnapshotStatus.Valid)
+        {
+            LastLoadStatus = CalendarLoadStatus.Temporary;
+            RestorePrimary(temporary, primaryStatus);
+            return temporary;
+        }
+
+        var startupBackups = GetStartupBackups(out var backupScanFailed);
+        foreach (var (path, _) in startupBackups.OrderByDescending(backup => backup.CreatedAt))
+        {
+            if (ReadSnapshot(path, out var snapshot, out _) != SnapshotStatus.Valid) continue;
+            LastLoadStatus = CalendarLoadStatus.StartupBackup;
+            RestorePrimary(snapshot, primaryStatus);
+            return snapshot;
+        }
+
+        NeedsRecovery = primaryStatus != SnapshotStatus.Missing || backupStatus != SnapshotStatus.Missing ||
+            temporaryStatus != SnapshotStatus.Missing || backupScanFailed || startupBackups.Count > 0;
         LastLoadStatus = CalendarLoadStatus.Default;
         return new CalendarState();
     }
@@ -64,28 +122,42 @@ public sealed class CalendarDataStore
             return false;
         }
 
-        var temporaryPath = StatePath + ".tmp";
         try
         {
+            var primaryStatus = ReadSnapshot(StatePath, out _, out var previousJson);
+            var backupStatus = ReadSnapshot(BackupPath, out _, out _);
+            if (primaryStatus == SnapshotStatus.Unavailable || backupStatus == SnapshotStatus.Unavailable)
+                return false;
+
             Directory.CreateDirectory(DataDirectory);
-            File.WriteAllText(temporaryPath, Serialize(state));
-            if (TryRead(StatePath, out _)) File.Copy(StatePath, BackupPath, true);
-            File.Move(temporaryPath, StatePath, true);
+            var json = Serialize(state);
+            if (primaryStatus == SnapshotStatus.Valid && (previousJson != json || backupStatus != SnapshotStatus.Valid))
+                WriteSnapshot(BackupPath, previousJson, backupStatus);
+
+            if (primaryStatus != SnapshotStatus.Valid || previousJson != json)
+                WriteSnapshot(StatePath, json, primaryStatus);
+            NeedsRecovery = false;
+
+            if (primaryStatus != SnapshotStatus.Valid && backupStatus != SnapshotStatus.Valid)
+            {
+                try { WriteSnapshot(BackupPath, json, backupStatus); }
+                catch (Exception exception) { _logError("Saved calendar state but failed to create a backup.", exception); }
+            }
+
             return true;
         }
         catch (Exception exception)
         {
             _logError("Failed to save calendar state.", exception);
-            TryDeleteTemporaryFile(temporaryPath);
             return false;
         }
     }
 
-    public CalendarState Import(string path) => ReadValidated(path);
+    public CalendarState Import(string path) => DeserializeValidated(File.ReadAllText(path));
 
-    private static CalendarState ReadValidated(string path)
+    private static CalendarState DeserializeValidated(string json)
     {
-        var state = Deserialize(File.ReadAllText(path));
+        var state = Deserialize(json);
         if (state is null || !Validate(state)) throw new InvalidDataException("Calendar data is invalid.");
         RepeatDocumentService.NormalizeReferences(state);
         // Moving source anchors can increase the destination's combined document length.
@@ -146,32 +218,98 @@ public sealed class CalendarDataStore
     public static string Serialize(CalendarState state) => JsonSerializer.Serialize(state, Options);
     public static CalendarState? Deserialize(string json) => JsonSerializer.Deserialize<CalendarState>(json, Options);
 
-    private bool TryRead(string path, out CalendarState state)
+    private SnapshotStatus ReadSnapshot(string path, out CalendarState state, out string json)
     {
         state = null!;
-        if (!File.Exists(path)) return false;
+        json = string.Empty;
         try
         {
-            state = ReadValidated(path);
-            return true;
+            json = File.ReadAllText(path);
+            state = DeserializeValidated(json);
+            return SnapshotStatus.Valid;
+        }
+        catch (FileNotFoundException)
+        {
+            return SnapshotStatus.Missing;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return SnapshotStatus.Missing;
         }
         catch (Exception exception)
         {
             _logError($"Failed to read calendar data: {path}", exception);
-            return false;
+            return exception is JsonException or InvalidDataException ? SnapshotStatus.Corrupt : SnapshotStatus.Unavailable;
         }
     }
 
-    private void RestorePrimaryFromBackup()
+    private List<(string Path, DateTime CreatedAt)> GetStartupBackups(out bool scanFailed)
     {
+        var backups = new List<(string Path, DateTime CreatedAt)>();
+        scanFailed = false;
         try
         {
-            Directory.CreateDirectory(DataDirectory);
-            File.Copy(BackupPath, StatePath, true);
+            foreach (var path in Directory.EnumerateFiles(StartupBackupsDirectory, "calendar-*.json"))
+            {
+                var nameParts = Path.GetFileNameWithoutExtension(path).Split('-');
+                if (nameParts.Length == 3 && Guid.TryParseExact(nameParts[2], "N", out _) &&
+                    DateTime.TryParseExact(nameParts[1], StartupBackupTimestampFormat, CultureInfo.InvariantCulture,
+                        DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var createdAt))
+                    backups.Add((path, createdAt));
+            }
+        }
+        catch (DirectoryNotFoundException)
+        {
+            // The directory is created after the first successful load.
         }
         catch (Exception exception)
         {
-            _logError("Loaded backup but failed to restore the primary data file.", exception);
+            scanFailed = true;
+            _logError("Failed to list startup calendar backups.", exception);
+        }
+
+        return backups;
+    }
+
+    private void RestorePrimary(CalendarState state, SnapshotStatus primaryStatus)
+    {
+        if (primaryStatus == SnapshotStatus.Unavailable) return;
+        try
+        {
+            // A recovered .tmp may be the only good copy, so use separate staging.
+            WriteSnapshot(StatePath, Serialize(state), primaryStatus, ".restore.tmp");
+        }
+        catch (Exception exception)
+        {
+            _logError("Loaded a recovery snapshot but failed to restore the primary data file.", exception);
+        }
+    }
+
+    private void WriteSnapshot(string path, string json, SnapshotStatus previousStatus, string temporarySuffix = ".tmp")
+    {
+        var temporaryPath = path + temporarySuffix;
+        try
+        {
+            using (var stream = new FileStream(temporaryPath, FileMode.Create, FileAccess.Write, FileShare.None))
+            {
+                using (var writer = new StreamWriter(stream, leaveOpen: true))
+                    writer.Write(json);
+                stream.Flush(flushToDisk: true);
+            }
+
+            if (previousStatus == SnapshotStatus.Corrupt)
+            {
+                var preservedPath = path + "." + Guid.NewGuid().ToString("N") + ".corrupt";
+                File.Copy(path, preservedPath);
+                _logError($"Preserved unreadable calendar data: {preservedPath}", null);
+            }
+
+            File.Move(temporaryPath, path, overwrite: true);
+        }
+        catch
+        {
+            TryDeleteTemporaryFile(temporaryPath);
+            throw;
         }
     }
 
