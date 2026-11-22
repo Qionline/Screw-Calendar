@@ -6,6 +6,16 @@
 
 ## [Unreleased]
 
+## [1.2.2] - 2026-11-23
+
+### Changed
+
+- 底部常驻和今日待办在焦点离开编辑栏时自动保存并恢复阅读。日期待办弹窗失去激活时自动保存并关闭。编辑区内切换格式工具可以继续编辑，保存失败时保留草稿。
+
+### Fixed
+
+- 日期待办弹窗的「清空文档」仅在文字区域内响应点击，避免点到周围留白时误清空。
+
 ## [1.2.1] - 2026-11-23
 
 ### Added
@@ -121,7 +131,8 @@
 - 简体中文和英文界面。
 - 开源仓库规范、自动化回归测试、持续集成和版本发布流程。
 
-[Unreleased]: https://github.com/Qionline/Screw-Calendar/compare/v1.2.1...HEAD
+[Unreleased]: https://github.com/Qionline/Screw-Calendar/compare/v1.2.2...HEAD
+[1.2.2]: https://github.com/Qionline/Screw-Calendar/compare/v1.2.1...v1.2.2
 [1.2.1]: https://github.com/Qionline/Screw-Calendar/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/Qionline/Screw-Calendar/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/Qionline/Screw-Calendar/compare/v1.0.3...v1.1.0
