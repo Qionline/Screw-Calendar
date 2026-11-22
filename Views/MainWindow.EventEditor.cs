@@ -2,6 +2,7 @@ using System;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Threading;
 using Brushes = System.Windows.Media.Brushes;
 using HorizontalAlignment = System.Windows.HorizontalAlignment;
 using Orientation = System.Windows.Controls.Orientation;
@@ -21,10 +22,13 @@ public sealed partial class MainWindow
         var existing = GetRepeatDocument(date, permanent).Markdown;
         var dialog = NewEventDialog(string.Empty, ownerPosition);
         var previewsToday = !permanent && date.Date == _today.Date;
-        var previewTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(120) };
+        var previewTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(120) };
+        DispatcherOperation? focusSave = null;
+        var saving = false;
         previewTimer.Tick += (_, _) => { previewTimer.Stop(); RefreshTodayMarkdownPreview(); };
         dialog.Closed += (_, _) =>
         {
+            focusSave?.Abort();
             previewTimer.Stop();
             _markdownEditors.Clear(editorKey);
             if (!previewsToday) return;
@@ -68,28 +72,51 @@ public sealed partial class MainWindow
 
         bool SaveAndClose(bool clear = false)
         {
-            if (!(clear ? TryPersistMarkdown(date, permanent, new RepeatDocument(string.Empty, []), dialog)
-                : SaveMarkdownEditor(date, permanent, editor, dialog)))
+            if (saving) return false;
+            focusSave?.Abort();
+            focusSave = null;
+            saving = true;
+            try
             {
-                dialog.Activate();
-                return false;
-            }
+                if (!(clear ? TryPersistMarkdown(date, permanent, new RepeatDocument(string.Empty, []), dialog)
+                    : SaveMarkdownEditor(date, permanent, editor, dialog)))
+                {
+                    dialog.Activate();
+                    return false;
+                }
 
-            dialog.Close();
-            Render();
-            return true;
+                dialog.Close();
+                if (permanent) RenderTodoPanel();
+                else
+                {
+                    RefreshMarkdownDateCells(false);
+                    if (!previewsToday) RefreshTodayMarkdownPreview();
+                }
+                return true;
+            }
+            finally { saving = false; }
         }
 
         bool SaveDraftAndClose() => SaveAndClose();
+
+        dialog.Deactivated += (_, _) =>
+        {
+            if (saving || focusSave is not null || !dialog.IsVisible) return;
+            focusSave = dialog.Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(() =>
+            {
+                focusSave = null;
+                if (dialog.IsVisible && !dialog.IsActive) SaveDraftAndClose();
+            }));
+        };
 
         var actions = new Grid { VerticalAlignment = VerticalAlignment.Bottom };
         actions.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         actions.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         if (!string.IsNullOrWhiteSpace(existing))
         {
-            var clear = Button(Localization.T("markdown.clear"), Localization.T("markdown.clearTooltip"), 95);
-            clear.Height = 38; clear.Margin = new Thickness(0); clear.Padding = new Thickness(0);
-            clear.HorizontalAlignment = HorizontalAlignment.Left; clear.HorizontalContentAlignment = HorizontalAlignment.Left;
+            var clear = Button(Localization.T("markdown.clear"), Localization.T("markdown.clearTooltip"), double.NaN);
+            clear.Height = double.NaN; clear.Margin = new Thickness(0); clear.Padding = new Thickness(0);
+            clear.HorizontalAlignment = HorizontalAlignment.Left; clear.VerticalAlignment = VerticalAlignment.Center;
             clear.Foreground = WorkBrush(); clear.Background = Brushes.Transparent; clear.BorderBrush = Brushes.Transparent;
             clear.BorderThickness = new Thickness(0); clear.Template = RoundedButtonTemplate(true);
             clear.Click += (_, _) => SaveAndClose(clear: true);

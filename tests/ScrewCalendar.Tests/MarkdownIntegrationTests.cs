@@ -293,6 +293,7 @@ internal static class MarkdownIntegrationTests
                 Invoke(window, "LoadMarkdownEditor", movedEditor, sourceDate, false);
                 Check(movedEditor.GetRepeatDraft().Bindings.Count == 0 && !movedEditor.GetMarkdown().Contains("[repeat", StringComparison.Ordinal),
                     "Reloading the old date through the app editor path matches its browsing view after a range change");
+                VerifyFocusSaves(store, today, key);
             }
             catch (Exception exception) { failure = exception; }
             finally
@@ -312,6 +313,114 @@ internal static class MarkdownIntegrationTests
         if (!thread.Join(TimeSpan.FromSeconds(45))) throw new InvalidOperationException("Calendar Markdown integration timed out");
         if (failure is not null) throw new InvalidOperationException(failure.ToString(), failure);
     }
+
+    private static void VerifyFocusSaves(AppStore store, DateTime today, string key)
+    {
+        var window = new AppWindow(store, false) { Width = 540, Height = 700 };
+        var otherWindow = new Window { Width = 180, Height = 100, ShowInTaskbar = false };
+        try
+        {
+            window.Show();
+            window.Activate();
+            ProcessFocusChanges();
+            Invoke(window, "BeginInlineMarkdownEdit", today, true, (int?)0);
+            ProcessFocusChanges();
+            var permanent = Field(window, "_permanentSection");
+            var permanentEditor = (AppEditor)Property(permanent, "Editor");
+            var permanentNative = (ICSharpCode.AvalonEdit.TextEditor)permanentEditor.Child!;
+            permanentNative.Document.Insert(0, "Permanent focus save\n");
+            var permanentDraft = permanentEditor.GetMarkdown();
+            var toolbarButton = Descendants<Button>((Grid)Property(permanent, "Root")).First(button => Equals(button.Content, "MD"));
+            Check(toolbarButton.Focus(), "Toolbar can take keyboard focus within the section");
+            ProcessFocusChanges();
+            Check(!permanentEditor.IsPreviewMode && store.Load().PermanentMarkdown != permanentDraft, "Focusing a toolbar button keeps the draft open and unsaved");
+
+            otherWindow.Show();
+            otherWindow.Activate();
+            ProcessFocusChanges();
+            Check(permanentEditor.IsPreviewMode && store.Load().PermanentMarkdown == permanentDraft, "Deactivating the calendar saves permanent text and restores reading mode");
+
+            window.Activate();
+            Invoke(window, "BeginInlineMarkdownEdit", today, false, (int?)0);
+            ProcessFocusChanges();
+            var dailyEditor = (AppEditor)Property(Field(window, "_todaySection"), "Editor");
+            var dailyNative = (ICSharpCode.AvalonEdit.TextEditor)dailyEditor.Child!;
+            dailyNative.Document.Insert(0, "Daily focus save\n");
+            var dailyDraft = dailyEditor.GetMarkdown();
+            Check(((Button)Field(window, "_previousButton")).Focus(), "The calendar toolbar can take focus from the current section");
+            ProcessFocusChanges();
+            Check(dailyEditor.IsPreviewMode && CalendarApp::ScrewCalendar.RepeatDocumentService.Load(store.Load(), key).Markdown == dailyDraft,
+                "Moving focus to another calendar control saves today's text and restores reading mode");
+
+            Invoke(window, "ShowMarkdownEditor", today, false, null);
+            ProcessFocusChanges();
+            var dialog = window.OwnedWindows.Cast<Window>().Single();
+            VerifyClearButtonHitArea(dialog);
+            var popupEditor = Descendants<AppEditor>(dialog).Single();
+            var popupNative = (ICSharpCode.AvalonEdit.TextEditor)popupEditor.Child!;
+            popupNative.Document.Insert(0, "Popup focus save\n");
+            var popupDraft = popupEditor.GetMarkdown();
+            var popupToolbar = Descendants<Button>(dialog).First(button => Equals(button.Content, "MD"));
+            Check(popupToolbar.Focus(), "A popup toolbar button can receive focus");
+            ProcessFocusChanges();
+            Check(dialog.IsVisible && CalendarApp::ScrewCalendar.RepeatDocumentService.Load(store.Load(), key).Markdown == dailyDraft,
+                "Focus moving inside a popup does not close or save it");
+            otherWindow.Activate();
+            ProcessFocusChanges();
+            Check(!dialog.IsVisible && CalendarApp::ScrewCalendar.RepeatDocumentService.Load(store.Load(), key).Markdown == popupDraft,
+                "Deactivating the popup saves its draft and closes it");
+
+            Invoke(window, "ShowMarkdownEditor", today, false, null);
+            ProcessFocusChanges();
+            dialog = window.OwnedWindows.Cast<Window>().Single();
+            popupEditor = Descendants<AppEditor>(dialog).Single();
+            ((ICSharpCode.AvalonEdit.TextEditor)popupEditor.Child!).Document.Insert(0, "Cancelled draft\n");
+            Descendants<Button>(dialog).Single(button => Equals(button.Content, "×")).RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+            ProcessFocusChanges();
+            Check(!dialog.IsVisible && CalendarApp::ScrewCalendar.RepeatDocumentService.Load(store.Load(), key).Markdown == popupDraft,
+                "Explicit popup close still discards the unsaved draft");
+
+            Invoke(window, "ShowMarkdownEditor", today, false, null);
+            ProcessFocusChanges();
+            dialog = window.OwnedWindows.Cast<Window>().Single();
+            popupEditor = Descendants<AppEditor>(dialog).Single();
+            ((ICSharpCode.AvalonEdit.TextEditor)popupEditor.Child!).Document.Insert(0, "Switch to permanent\n");
+            popupDraft = popupEditor.GetMarkdown();
+            window.Activate();
+            Invoke(window, "BeginInlineMarkdownEdit", today, true, (int?)0);
+            ProcessFocusChanges();
+            Check(!dialog.IsVisible && CalendarApp::ScrewCalendar.RepeatDocumentService.Load(store.Load(), key).Markdown == popupDraft &&
+                !permanentEditor.IsPreviewMode && permanentEditor.IsKeyboardFocusWithin,
+                "Saving a popup on focus loss preserves keyboard focus in the newly opened inline editor");
+        }
+        finally
+        {
+            SetField(window, "_allowExit", true);
+            window.Close();
+            otherWindow.Close();
+        }
+    }
+
+    private static void VerifyClearButtonHitArea(Window dialog)
+    {
+        var text = CalendarApp::ScrewCalendar.Localization.T("markdown.clear");
+        var clear = Descendants<Button>(dialog).Single(button => Equals(button.Content, text));
+        var label = Descendants<TextBlock>(clear).Single(block => block.Text == text);
+
+        bool HitsClear(double x, double y)
+        {
+            var point = label.TranslatePoint(new Point(x, y), dialog);
+            var hit = VisualTreeHelper.HitTest(dialog, point)?.VisualHit;
+            return hit == clear || (hit is not null && clear.IsAncestorOf(hit));
+        }
+
+        Check(HitsClear(label.ActualWidth / 2, label.ActualHeight / 2), "The clear label can be clicked");
+        Check(!HitsClear(label.ActualWidth + 4, label.ActualHeight / 2) &&
+              !HitsClear(label.ActualWidth / 2, -4) && !HitsClear(label.ActualWidth / 2, label.ActualHeight + 4),
+            "Blank space around the clear label does not hit the destructive button");
+    }
+
+    private static void ProcessFocusChanges() => Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.SystemIdle);
 
     private static object? Invoke(object target, string method, params object?[] arguments) => target.GetType().GetMethod(method, BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.DeclaredOnly)!.Invoke(target, arguments);
     private static object Field(object target, string name) => target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(target)!;

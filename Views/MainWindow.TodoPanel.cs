@@ -5,6 +5,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 using Brushes = System.Windows.Media.Brushes;
 
 namespace ScrewCalendar;
@@ -14,6 +15,10 @@ public sealed partial class MainWindow
 {
     private Grid BuildTodoPanel()
     {
+        Deactivated += (_, _) =>
+        {
+            if (_activeInlineSection is { } section) QueueInlineFocusSave(section);
+        };
         var layer = new Grid { Background = Brushes.Transparent };
         layer.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
         layer.RowDefinitions.Add(new RowDefinition { Height = new GridLength(CalendarLayout.TodoResizeGripHeight) });
@@ -68,6 +73,8 @@ public sealed partial class MainWindow
     private TodoMarkdownSection? _permanentSection;
     private TodoMarkdownSection? _todaySection;
     private TodoMarkdownSection? _activeInlineSection;
+    private DispatcherOperation? _inlineFocusSave;
+    private bool _inlineSaveInProgress;
     private bool _todoLayoutHasToday;
 
     private void RenderTodoPanel()
@@ -169,11 +176,17 @@ public sealed partial class MainWindow
         Grid.SetRow(content, 1);
         root.Children.Add(content);
         var section = new TodoMarkdownSection { Permanent = permanent, Date = date, Root = root, Editor = editor, EmptyHint = empty };
+        root.AddHandler(Keyboard.LostKeyboardFocusEvent, new KeyboardFocusChangedEventHandler((_, args) =>
+        {
+            // Reparenting and transient menus can remove focus without leaving for another control in this window.
+            if (args.NewFocus is DependencyObject target && Window.GetWindow(target) == this)
+                QueueInlineFocusSave(section);
+        }), handledEventsToo: true);
         empty.MouseLeftButtonDown += (_, args) => { args.Handled = true; BeginInlineMarkdownEdit(date, permanent, 0); };
         editor.EditRequested += offset => BeginInlineMarkdownEdit(date, permanent, offset);
         editor.ContentChanged += (_, _) =>
         {
-            if (section.Editing) return; // Closing the editor or Ctrl+S persists the draft.
+            if (section.Editing) return; // Persist the draft when editing ends.
             if (!SaveMarkdownEditor(section.Date, section.Permanent, editor))
                 LoadMarkdownEditor(editor, section.Date, section.Permanent);
             else RefreshMarkdownDateCells(section.Permanent);
@@ -261,15 +274,38 @@ public sealed partial class MainWindow
         ConfigureSectionHeader(section);
         UpdateSectionState(section);
         if (!permanent && !_todoLayoutHasToday) RebuildTodoColumns();
-        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, new Action(section.Editor.FocusEditor));
+        Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() =>
+        {
+            if (_activeInlineSection == section && section.Editing) section.Editor.FocusEditor();
+        }));
+    }
+
+    private void QueueInlineFocusSave(TodoMarkdownSection section)
+    {
+        if (_activeInlineSection != section || _inlineSaveInProgress || _inlineFocusSave is not null) return;
+        // Let the click and any toolbar focus restoration finish before changing the visual tree.
+        _inlineFocusSave = Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
+        {
+            _inlineFocusSave = null;
+            if (_activeInlineSection == section && section.Editing && (!IsActive || !section.Root.IsKeyboardFocusWithin))
+                SaveInlineMarkdownEdit(section);
+        }));
     }
 
     private bool SaveInlineMarkdownEdit(TodoMarkdownSection section)
     {
-        if (!SaveMarkdownEditor(section.Date, section.Permanent, section.Editor)) return false;
-        RefreshMarkdownDateCells(section.Permanent);
-        EndInlineMarkdownEdit(section);
-        return true;
+        if (_inlineSaveInProgress) return false;
+        _inlineFocusSave?.Abort();
+        _inlineFocusSave = null;
+        _inlineSaveInProgress = true;
+        try
+        {
+            if (!SaveMarkdownEditor(section.Date, section.Permanent, section.Editor)) return false;
+            RefreshMarkdownDateCells(section.Permanent);
+            EndInlineMarkdownEdit(section);
+            return true;
+        }
+        finally { _inlineSaveInProgress = false; }
     }
 
     private void CancelInlineMarkdownEdit(TodoMarkdownSection section)
@@ -281,8 +317,10 @@ public sealed partial class MainWindow
 
     private void EndInlineMarkdownEdit(TodoMarkdownSection section)
     {
-        section.Editor.SetPreviewMode(true);
+        _inlineFocusSave?.Abort();
+        _inlineFocusSave = null;
         _activeInlineSection = null;
+        section.Editor.SetPreviewMode(true);
         EndTodoEditorInteraction();
         RenderTodoPanel();
     }
