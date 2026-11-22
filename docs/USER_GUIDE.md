@@ -86,7 +86,9 @@ Screw Calendar 是免安装、自包含程序，不要求另行安装 .NET Runti
 %LocalAppData%\ScrewCalendar\data\calendar.json
 ```
 
-每次成功保存时，程序维护最近一份有效备份 `calendar.json.bak`。主文件损坏时会尝试从备份恢复，错误信息写入 `%LocalAppData%\ScrewCalendar\logs\app.log`。
+程序在保存时维护 `calendar.json.bak`。每次启动读到有效存档后，还会在数据目录的 `backups` 子目录新建一份 JSON 备份，并清理超过 7 天的启动备份。
+
+主文件损坏时，程序会依次尝试读取 `calendar.json.bak`、完整的临时文件和最近的有效启动备份。错误信息写入 `%LocalAppData%\ScrewCalendar\logs\app.log`。如需防范硬盘故障，请将 JSON 和 `assets` 另存到其他物理盘或云端。
 
 设置中的“导出 JSON”包含 Markdown 和应用设置，但不包含图片文件。完整迁移步骤：
 

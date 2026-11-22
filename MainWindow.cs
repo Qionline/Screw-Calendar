@@ -60,6 +60,7 @@ public sealed partial class MainWindow : Window
     private Button _settingsButton = null!;
     private readonly Border _resizeGrip;
     private readonly DispatcherTimer _clock = new() { Interval = TimeSpan.FromSeconds(30) };
+    private readonly DispatcherTimer _geometrySaveTimer = new() { Interval = TimeSpan.FromMilliseconds(300) };
     private DateTime _today = DateTime.Today;
     private DateTime _anchor = DateTime.Today;
     private bool _home = true;
@@ -92,8 +93,9 @@ public sealed partial class MainWindow : Window
         {
             if (!Dispatcher.HasShutdownStarted) Dispatcher.BeginInvoke(Render);
         };
-        _state = _dataStore.Load();
-        if (initializeDesktopServices) StartupRegistration.SetEnabled(StartupValueName, _state.StartWithWindows, logError: AppLogger.Error);
+        _state = initializeDesktopServices ? _dataStore.LoadOnStartup(DateTimeOffset.UtcNow) : _dataStore.Load();
+        if (initializeDesktopServices && !_dataStore.NeedsRecovery)
+            StartupRegistration.SetEnabled(StartupValueName, _state.StartWithWindows, logError: AppLogger.Error);
         _windowLayerController = new WindowLayerController(this, allowFullscreenCover: true);
         _windowLayerController.SetAlwaysOnTop(_state.Topmost);
         Localization.SetLanguage(_state.Language);
@@ -182,8 +184,9 @@ public sealed partial class MainWindow : Window
             else _windowLayerController.Refresh();
             if (initializeDesktopServices) _ = _holidayUpdates.RefreshForCalendarYearAsync(_anchor.Year);
         };
-        LocationChanged += (_, _) => SaveGeometry();
-        SizeChanged += (_, _) => SaveGeometry();
+        _geometrySaveTimer.Tick += (_, _) => SaveGeometry();
+        LocationChanged += (_, _) => ScheduleGeometrySave();
+        SizeChanged += (_, _) => ScheduleGeometrySave();
         Closing += OnClosing;
         StateChanged += (_, _) =>
         {

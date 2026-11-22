@@ -32,4 +32,10 @@ public partial class App : System.Windows.Application
         _instanceGuard?.Dispose();
         base.OnExit(e);
     }
+
+    protected override void OnSessionEnding(SessionEndingCancelEventArgs e)
+    {
+        base.OnSessionEnding(e);
+        if (!e.Cancel) _window?.FlushPendingGeometrySave();
+    }
 }

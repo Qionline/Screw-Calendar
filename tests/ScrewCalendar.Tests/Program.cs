@@ -25,6 +25,10 @@ var tests = new (string Name, Action Run)[]
     ("Independent component sizing", TestComponentSizing),
     ("Primary persistence", TestPrimaryPersistence),
     ("Backup recovery", TestBackupRecovery),
+    ("Interrupted save recovery", TestInterruptedSaveRecovery),
+    ("Unreadable snapshot preservation", TestUnreadableSnapshotPreservation),
+    ("Seven-day startup backup retention", TestStartupBackupRetention),
+    ("Startup backup recovery", TestStartupBackupRecovery),
     ("Version 3 validation", TestValidation),
     ("Markdown documents", TestMarkdownDocuments),
     ("Markdown semantic boundaries", ScrewCalendar.Tests.MarkdownTests.SemanticBoundaries),
@@ -105,9 +109,18 @@ static void TestPrimaryPersistence()
 {
     WithTemporaryDirectory(path =>
     {
+        var store = new CalendarDataStore(path, (_, _) => { });
+        Directory.CreateDirectory(store.StatePath + ".tmp");
+        True(!store.Save(ValidState("Failed save")), "A blocked primary stage fails the first save");
+        True(!File.Exists(store.BackupPath), "A failed first save does not publish the rejected data as a backup");
+    });
+
+    WithTemporaryDirectory(path =>
+    {
         var store = new CalendarDataStore(path, (message, exception) => throw new InvalidOperationException(message, exception));
         var state = ValidState("# Primary");
         True(store.Save(state), "Save should succeed");
+        Equal("# Primary", store.Import(store.BackupPath).DateMarkdown["2026-09-19"], "First save creates a usable backup");
         var loaded = store.Load();
         Equal("# Primary", loaded.DateMarkdown["2026-09-19"], "Loaded Markdown");
         Equal(CalendarLoadStatus.Primary, store.LastLoadStatus, "Load status");
@@ -121,10 +134,117 @@ static void TestBackupRecovery()
         var store = new CalendarDataStore(path, (_, _) => { });
         True(store.Save(ValidState("- [ ] Backup")), "First save");
         True(store.Save(ValidState("- [ ] Primary")), "Second save");
-        File.WriteAllText(store.StatePath, "{ damaged json");
+        True(store.Save(ValidState("- [ ] Primary")), "Unchanged save should succeed");
+        var damaged = new byte[512];
+        File.WriteAllBytes(store.StatePath, damaged);
         var recovered = store.Load();
         Equal("- [ ] Backup", recovered.DateMarkdown["2026-09-19"], "Recovered backup Markdown");
         Equal(CalendarLoadStatus.Backup, store.LastLoadStatus, "Backup status");
+        var preserved = Directory.GetFiles(path, "calendar.json.*.corrupt").Single();
+        True(File.ReadAllBytes(preserved).SequenceEqual(damaged), "Recovery preserves damaged primary bytes");
+        Equal("- [ ] Backup", store.Import(store.StatePath).DateMarkdown["2026-09-19"], "Recovery restores a readable primary");
+    });
+}
+
+static void TestInterruptedSaveRecovery()
+{
+    WithTemporaryDirectory(path =>
+    {
+        var store = new CalendarDataStore(path, (_, _) => { });
+        File.WriteAllBytes(store.StatePath, new byte[512]);
+        File.WriteAllBytes(store.BackupPath, new byte[1024]);
+        var temporaryPath = store.StatePath + ".tmp";
+        store.Export(temporaryPath, ValidState("Pending snapshot"));
+
+        var recovered = store.Load();
+        Equal(CalendarLoadStatus.Temporary, store.LastLoadStatus, "Temporary recovery status");
+        Equal("Pending snapshot", recovered.DateMarkdown["2026-09-19"], "A complete staged snapshot can recover both damaged files");
+        Equal("Pending snapshot", store.Import(store.StatePath).DateMarkdown["2026-09-19"], "Recovery publishes a readable primary");
+        True(File.Exists(temporaryPath), "Recovery keeps the staged source");
+        True(store.Save(recovered), "An unchanged save repairs the damaged backup");
+        Equal("Pending snapshot", store.Import(store.BackupPath).DateMarkdown["2026-09-19"], "Repaired backup contains recovered data");
+    });
+}
+
+static void TestUnreadableSnapshotPreservation()
+{
+    WithTemporaryDirectory(path =>
+    {
+        var store = new CalendarDataStore(path, (_, _) => { });
+        var damagedPrimary = new byte[512];
+        var damagedBackup = new byte[1024];
+        File.WriteAllBytes(store.StatePath, damagedPrimary);
+        File.WriteAllBytes(store.BackupPath, damagedBackup);
+
+        Equal(0, store.Load().DateMarkdown.Count, "Unreadable files show a default state");
+        True(store.NeedsRecovery, "Window placement must not save a blank state over the damaged snapshots");
+        True(store.Save(ValidState("Imported data")), "An explicit save can resume persistence");
+        True(!store.NeedsRecovery, "Successful save resumes automatic saves");
+        var preservedPrimary = Directory.GetFiles(path, "calendar.json.*.corrupt")
+            .Single(file => !file.StartsWith(store.BackupPath + ".", StringComparison.Ordinal));
+        var preservedBackup = Directory.GetFiles(path, "calendar.json.bak.*.corrupt").Single();
+        True(File.ReadAllBytes(preservedPrimary).SequenceEqual(damagedPrimary), "Replacement preserves original primary bytes");
+        True(File.ReadAllBytes(preservedBackup).SequenceEqual(damagedBackup), "Replacement preserves original backup bytes");
+        Equal("Imported data", store.Load().DateMarkdown["2026-09-19"], "Explicit save persists the replacement data");
+    });
+}
+
+static void TestStartupBackupRetention()
+{
+    WithTemporaryDirectory(path =>
+    {
+        var store = new CalendarDataStore(path, (message, exception) => throw new InvalidOperationException(message, exception));
+        var now = new DateTimeOffset(2026, 11, 23, 10, 0, 0, TimeSpan.FromHours(8));
+        store.LoadOnStartup(now);
+        True(!Directory.Exists(store.StartupBackupsDirectory), "First launch has no saved state to back up");
+
+        True(store.Save(ValidState("Expired")), "Save an old document");
+        store.LoadOnStartup(now.AddDays(-8));
+        var manualExport = Path.Combine(store.StartupBackupsDirectory, "calendar-manual.json");
+        store.Export(manualExport, ValidState("Manual export"));
+
+        True(store.Save(ValidState("Seven days ago")), "Save document at the retention boundary");
+        store.LoadOnStartup(now.AddDays(-7));
+        True(store.Save(ValidState("Earlier today")), "Save document before the first startup today");
+        store.LoadOnStartup(now.AddHours(-1));
+        True(store.Save(ValidState("Latest")), "Save document before the second startup today");
+        store.LoadOnStartup(now);
+
+        var snapshots = Directory.GetFiles(store.StartupBackupsDirectory, "calendar-*.json")
+            .Where(file => file != manualExport)
+            .Order(StringComparer.Ordinal)
+            .Select(file => store.Import(file).DateMarkdown["2026-09-19"]);
+        True(snapshots.SequenceEqual(new[] { "Seven days ago", "Earlier today", "Latest" }),
+            "Retention removes expired files and keeps separate snapshots from each startup");
+        Equal("Manual export", store.Import(manualExport).DateMarkdown["2026-09-19"], "Retention leaves manual exports alone");
+        Equal("Earlier today", store.Import(store.BackupPath).DateMarkdown["2026-09-19"], "Startup does not rotate the normal save backup");
+    });
+}
+
+static void TestStartupBackupRecovery()
+{
+    WithTemporaryDirectory(path =>
+    {
+        var store = new CalendarDataStore(path, (_, _) => { });
+        var now = new DateTimeOffset(2026, 11, 23, 10, 0, 0, TimeSpan.Zero);
+        True(store.Save(ValidState("Recoverable")), "Save a document for startup backup");
+        store.LoadOnStartup(now.AddDays(-8));
+        var olderBackup = Directory.GetFiles(store.StartupBackupsDirectory).Single();
+        store.LoadOnStartup(now.AddDays(-6));
+        var newerBackup = Directory.GetFiles(store.StartupBackupsDirectory).Single(file => file != olderBackup);
+
+        var damaged = new byte[512];
+        File.WriteAllBytes(store.StatePath, damaged);
+        File.WriteAllBytes(store.BackupPath, damaged);
+        File.WriteAllBytes(newerBackup, damaged);
+
+        var recovered = store.LoadOnStartup(now);
+        Equal(CalendarLoadStatus.StartupBackup, store.LastLoadStatus, "Startup backup recovery status");
+        Equal("Recoverable", recovered.DateMarkdown["2026-09-19"], "Recovery skips unreadable snapshots and checks older ones before pruning");
+        Equal("Recoverable", store.Import(store.StatePath).DateMarkdown["2026-09-19"], "Startup recovery restores the primary");
+        True(!File.Exists(olderBackup), "An expired snapshot is removed once its replacement is saved");
+        var replacement = Directory.GetFiles(store.StartupBackupsDirectory).Single(file => file != newerBackup);
+        Equal("Recoverable", store.Import(replacement).DateMarkdown["2026-09-19"], "A new backup preserves the recovered data");
     });
 }
 
