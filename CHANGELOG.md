@@ -6,10 +6,14 @@
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-11-23
+
 ### Added
 
 - 设置窗口底部显示当前版本，并可检查 GitHub 的最新正式发布。检查中显示进度指示，发现新版后可点击「下载更新」。
 - 一键更新会下载并验证 Windows x64 发布包，保存待办草稿，再替换程序文件并重启。安装失败或新版未确认启动时会尝试恢复旧版。更新保留现有日历存档和图片。
+
+从旧版升级到 v1.3.0 时，请先从托盘退出旧程序，再手动下载、解压并运行新版。安装 v1.3.0 后，可在设置中检查和安装后续更新。
 
 ## [1.2.2] - 2026-11-23
 
@@ -136,7 +140,8 @@
 - 简体中文和英文界面。
 - 开源仓库规范、自动化回归测试、持续集成和版本发布流程。
 
-[Unreleased]: https://github.com/Qionline/Screw-Calendar/compare/v1.2.2...HEAD
+[Unreleased]: https://github.com/Qionline/Screw-Calendar/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/Qionline/Screw-Calendar/compare/v1.2.2...v1.3.0
 [1.2.2]: https://github.com/Qionline/Screw-Calendar/compare/v1.2.1...v1.2.2
 [1.2.1]: https://github.com/Qionline/Screw-Calendar/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/Qionline/Screw-Calendar/compare/v1.1.0...v1.2.0
