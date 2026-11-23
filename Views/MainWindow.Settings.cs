@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
@@ -16,6 +18,8 @@ namespace ScrewCalendar;
 // Calendar settings window and its state bindings.
 public sealed partial class MainWindow
 {
+    private readonly AppUpdateService _appUpdates;
+
     private void ShowSettings(Point? ownerPosition = null)
     {
         if (_settingsDialog is { IsVisible: true })
@@ -221,12 +225,134 @@ public sealed partial class MainWindow
         var layout = new Grid();
         layout.RowDefinitions.Add(new RowDefinition { Height = new GridLength(52) });
         layout.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+        layout.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        var updateFooter = BuildUpdateFooter(dialog);
         Grid.SetRow(header, 0);
         Grid.SetRow(scroll, 1);
+        Grid.SetRow(updateFooter, 2);
         layout.Children.Add(header);
         layout.Children.Add(scroll);
+        layout.Children.Add(updateFooter);
         dialog.Content = DialogSurface(layout, SettingsDialogPadding());
         dialog.Show();
+    }
+
+    private StackPanel BuildUpdateFooter(Window dialog)
+    {
+        var footer = new StackPanel();
+        footer.Children.Add(SettingsDivider());
+
+        var row = new Grid { Margin = new Thickness(0, 10, 0, 0) };
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        var version = Text($"v{AppUpdateService.CurrentVersion}", 12, Muted());
+        version.VerticalAlignment = VerticalAlignment.Center;
+        row.Children.Add(version);
+
+        var button = Button(Localization.T("update.check"), string.Empty, 142);
+        button.Margin = new Thickness(0);
+        button.Background = InputBackground();
+        ToolTipService.SetShowOnDisabled(button, true);
+        Grid.SetColumn(button, 1);
+        row.Children.Add(button);
+        footer.Children.Add(row);
+
+        Version? availableUpdate = null;
+        CancellationTokenSource? pendingUpdate = null;
+        dialog.Closed += (_, _) => pendingUpdate?.Cancel();
+        button.Click += async (_, _) =>
+        {
+            if (!button.IsEnabled || pendingUpdate is not null) return;
+            if (availableUpdate is { } versionToInstall &&
+                System.Windows.MessageBox.Show(dialog, Localization.T("update.confirm", versionToInstall), Localization.T("app.title"),
+                    MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
+                return;
+
+            using var cancellation = new CancellationTokenSource();
+            pendingUpdate = cancellation;
+            button.IsEnabled = false;
+            button.Template = RoundedButtonTemplate(true);
+            try
+            {
+                if (availableUpdate is { } latestVersion)
+                {
+                    await DownloadAndInstallUpdateAsync(button, latestVersion, cancellation.Token);
+                    return;
+                }
+
+                ShowUpdateProgress(button, "update.checking");
+                var latest = await _appUpdates.CheckForUpdateAsync(AppUpdateService.CurrentVersion, cancellation.Token);
+                if (cancellation.IsCancellationRequested) return;
+
+                if (latest is null)
+                {
+                    button.Content = Localization.T("update.current");
+                    button.Foreground = Muted();
+                    button.Opacity = .65;
+                    button.ToolTip = null;
+                }
+                else
+                {
+                    availableUpdate = latest;
+                    button.Foreground = Accent();
+                    button.ToolTip = Localization.T("update.available", latest);
+                }
+            }
+            catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+            {
+                // The settings window was closed.
+            }
+            catch (Exception exception)
+            {
+                AppLogger.Error(availableUpdate is null ? "Failed to check for a Screw Calendar update." : "Failed to prepare a Screw Calendar update.", exception);
+                if (cancellation.IsCancellationRequested) return;
+                if (availableUpdate is null)
+                {
+                    button.Content = Localization.T("update.retry");
+                    button.Template = RoundedButtonTemplate();
+                    button.IsEnabled = true;
+                }
+                else
+                {
+                    System.Windows.MessageBox.Show(dialog, Localization.T("update.downloadError"), Localization.T("app.title"),
+                        MessageBoxButton.OK, MessageBoxImage.Warning);
+                }
+            }
+            finally
+            {
+                pendingUpdate = null;
+                button.ClearValue(AutomationProperties.NameProperty);
+                if (availableUpdate is not null && dialog.IsVisible)
+                {
+                    button.Content = Localization.T("update.download");
+                    button.Template = RoundedButtonTemplate();
+                    button.IsEnabled = true;
+                }
+            }
+        };
+        return footer;
+    }
+
+    private (ProgressBar Meter, TextBlock Label) ShowUpdateProgress(Button button, string key)
+    {
+        var status = Localization.T(key);
+        var loading = new StackPanel { Orientation = Orientation.Horizontal };
+        var meter = new ProgressBar
+        {
+            Width = 20,
+            Height = 4,
+            Margin = new Thickness(0, 0, 8, 0),
+            Foreground = Accent(),
+            Background = Line(),
+            VerticalAlignment = VerticalAlignment.Center,
+            IsIndeterminate = true
+        };
+        var label = Text(status, button.FontSize, Foreground());
+        loading.Children.Add(meter);
+        loading.Children.Add(label);
+        button.Content = loading;
+        AutomationProperties.SetName(button, status);
+        return (meter, label);
     }
 
     private void AddSettingsSectionHeader(StackPanel root, string key, bool first = false)

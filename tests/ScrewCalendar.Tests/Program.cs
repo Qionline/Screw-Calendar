@@ -59,6 +59,8 @@ var tests = new (string Name, Action Run)[]
     ("Localization keys", TestLocalizationKeys),
     ("Calendar metadata", TestCalendarMetadata),
     ("Release metadata", TestReleaseMetadata),
+    ("Application update version check", ScrewCalendar.Tests.AppUpdateTests.CheckVersions),
+    ("Application update download and rollback", ScrewCalendar.Tests.AppUpdateTests.DownloadAndInstall),
     ("Markdown calendar integration", ScrewCalendar.Tests.MarkdownIntegrationTests.Run)
 };
 

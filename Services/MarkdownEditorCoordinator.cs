@@ -17,8 +17,10 @@ internal sealed class MarkdownEditorCoordinator
             return false;
         }
 
-        return _saveAndClose?.Invoke() ?? true;
+        return TrySaveAndClose();
     }
+
+    public bool TrySaveAndClose() => _saveAndClose?.Invoke() ?? true;
 
     public void Register(string documentKey, Action activate, Func<bool> saveAndClose)
     {

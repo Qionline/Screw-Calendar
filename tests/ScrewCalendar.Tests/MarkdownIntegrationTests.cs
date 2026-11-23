@@ -294,6 +294,7 @@ internal static class MarkdownIntegrationTests
                 Check(movedEditor.GetRepeatDraft().Bindings.Count == 0 && !movedEditor.GetMarkdown().Contains("[repeat", StringComparison.Ordinal),
                     "Reloading the old date through the app editor path matches its browsing view after a range change");
                 VerifyFocusSaves(store, today, key);
+                AppUpdateTests.VerifySettingsFooter(store);
             }
             catch (Exception exception) { failure = exception; }
             finally
