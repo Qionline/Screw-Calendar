@@ -82,10 +82,11 @@ public sealed partial class MainWindow : Window
 
     public MainWindow() : this(CalendarDataStore.CreateDefault(), true) { }
 
-    internal MainWindow(CalendarDataStore dataStore, bool initializeDesktopServices)
+    internal MainWindow(CalendarDataStore dataStore, bool initializeDesktopServices, AppUpdateService? appUpdates = null)
     {
         _uiFont = (FontFamily)Application.Current.Resources["UiFont"];
         _dataStore = dataStore;
+        _appUpdates = appUpdates ?? new AppUpdateService();
         _imageStore = new MarkdownImageStore(_dataStore.AssetsDirectory);
         _metadata = CalendarMetadataService.CreateDefault();
         _holidayUpdates = new HolidayUpdateService(_metadata);
