@@ -294,6 +294,7 @@ internal static class MarkdownIntegrationTests
                 Check(movedEditor.GetRepeatDraft().Bindings.Count == 0 && !movedEditor.GetMarkdown().Contains("[repeat", StringComparison.Ordinal),
                     "Reloading the old date through the app editor path matches its browsing view after a range change");
                 VerifyFocusSaves(store, today, key);
+                VerifyLinkPaste((AppEditor)Invoke(window, "CreateMarkdownEditor", false)!);
                 AppUpdateTests.VerifySettingsFooter(store);
             }
             catch (Exception exception) { failure = exception; }
@@ -399,6 +400,55 @@ internal static class MarkdownIntegrationTests
             SetField(window, "_allowExit", true);
             window.Close();
             otherWindow.Close();
+        }
+    }
+
+    private static void VerifyLinkPaste(AppEditor editor)
+    {
+        const string url = "https://github.com/";
+        const string original = "Before old after";
+        Layout(editor);
+        editor.SetMarkdown(original);
+        var native = (ICSharpCode.AvalonEdit.TextEditor)editor.Child!;
+        native.Select(7, 3);
+        Check(Paste(url) && editor.GetMarkdown() == $"Before [{url}]({url}) after" &&
+            native.SelectionStart == 8 && native.SelectedText == url, "Pasting a URL replaces the original selection and selects only the link label");
+        native.Undo();
+        Check(editor.GetMarkdown() == original, "One undo removes the entire link paste");
+
+        native.Select(7, 3);
+        Check(Paste(url), "The single URL is handled by the shared paste event");
+        native.SelectedText = "GitHub";
+        Check(editor.GetMarkdown() == $"Before [GitHub]({url}) after", "Typing a link title leaves the URL intact");
+
+        const string complexUrl = "https://example.com/wiki/Title_(film)?a=1&b=2";
+        editor.SetMarkdown("");
+        Check(Paste(complexUrl) && editor.Snapshot.Links.Single().Url == complexUrl && editor.GetMarkdown().EndsWith($"(<{complexUrl}>)", StringComparison.Ordinal),
+            "A URL containing parentheses and a query retains its destination");
+
+        editor.SetMarkdown(original);
+        foreach (var clipboard in new[] { $"Read {url}", $"{url}\nhttps://example.com", $"[GitHub]({url})", $"<{url}>", "https://", "file:///C:/test" })
+            Check(!Paste(clipboard) && editor.GetMarkdown() == original, "Ordinary text and unsupported or already formatted links use native paste");
+        Check(!Paste(url, isDragDrop: true), "Drag and drop is not converted to a Markdown link");
+
+        editor.SetMarkdown($"[GitHub]({url})");
+        native.Select(1, 6);
+        Check(!Paste(url), "Pasting into an existing link label preserves native paste");
+        editor.SetMarkdown("`code`");
+        native.Select(2, 0);
+        Check(!Paste(url), "Pasting into inline code preserves native paste");
+        editor.SetMarkdown("```\ncode\n```");
+        native.Select(6, 0);
+        Check(!Paste(url), "Pasting into fenced code preserves native paste");
+        editor.SetPreviewMode(true);
+        Check(!Paste(url), "Reading mode does not handle pasted links");
+
+        bool Paste(string text, bool isDragDrop = false)
+        {
+            var data = new DataObject(DataFormats.UnicodeText, text);
+            var args = new DataObjectPastingEventArgs(data, isDragDrop, DataFormats.UnicodeText);
+            native.TextArea.RaiseEvent(args);
+            return args.CommandCancelled;
         }
     }
 
