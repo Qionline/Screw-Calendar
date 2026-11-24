@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-11-24
+
 ### Added
 
 - 在底部待办和日期编辑弹窗粘贴单个 HTTP 或 HTTPS 网址时，自动生成 Markdown 链接并选中显示文字，方便直接输入新标题。
@@ -144,7 +146,8 @@
 - 简体中文和英文界面。
 - 开源仓库规范、自动化回归测试、持续集成和版本发布流程。
 
-[Unreleased]: https://github.com/Qionline/Screw-Calendar/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/Qionline/Screw-Calendar/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/Qionline/Screw-Calendar/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/Qionline/Screw-Calendar/compare/v1.2.2...v1.3.0
 [1.2.2]: https://github.com/Qionline/Screw-Calendar/compare/v1.2.1...v1.2.2
 [1.2.1]: https://github.com/Qionline/Screw-Calendar/compare/v1.2.0...v1.2.1
