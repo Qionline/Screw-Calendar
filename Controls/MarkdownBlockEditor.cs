@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -7,6 +8,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using ICSharpCode.AvalonEdit;
+using ICSharpCode.AvalonEdit.Editing;
 
 namespace ScrewCalendar;
 
@@ -280,6 +282,37 @@ public sealed partial class MarkdownBlockEditor : Border
         _editor.Select(start + prefix.Length + reference.Length, 0);
         FocusEditor();
         _editor.TextArea.Caret.BringCaretToView();
+    }
+
+    internal bool TryPasteLink(string? text)
+    {
+        if (IsPreviewMode || text is null || _editor.TextArea.Selection is RectangleSelection) return false;
+        var url = text.Trim(' ', '\t', '\u00a0');
+        if (!(url.StartsWith("https://", StringComparison.OrdinalIgnoreCase) || url.StartsWith("http://", StringComparison.OrdinalIgnoreCase)) ||
+            url.Any(character => char.IsWhiteSpace(character) || char.IsControl(character) || character is '<' or '>' or '\\') ||
+            !Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Host.Length == 0)
+            return false;
+
+        var start = _editor.SelectionStart;
+        var end = start + _editor.SelectionLength;
+        var snapshot = Snapshot;
+        if (IsLiteralContext(snapshot.Lines[snapshot.LineIndexAt(start)]) ||
+            IsLiteralContext(snapshot.Lines[snapshot.LineIndexAt(end)])) return false;
+
+        var label = Regex.Replace(url, @"[\[\]`*_~&]", @"\$&");
+        var destination = url.IndexOfAny(['(', ')']) >= 0 ? $"<{url}>" : url;
+        _editor.SelectedText = $"[{label}]({destination})";
+        _editor.Select(start + 1, label.Length);
+        _editor.TextArea.Caret.BringCaretToView();
+        return true;
+
+        bool IsLiteralContext(MarkdownSourceLine line) =>
+            line.IsCode ||
+            line.Styles.Any(span => (span.Style is MarkdownTextStyle.Code or MarkdownTextStyle.Link) && IsInside(span.Start, span.Length)) ||
+            line.Replacements.Any(replacement => replacement.Kind == MarkdownReplacementKind.Image && IsInside(replacement.Start, replacement.Length));
+
+        bool IsInside(int offset, int length) =>
+            start > offset && start < offset + length || end > offset && end < offset + length;
     }
 
     private string NewlineAt(int lineNumber)

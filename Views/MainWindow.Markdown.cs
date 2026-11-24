@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -70,7 +71,21 @@ public sealed partial class MainWindow
         }
         DataObject.AddPastingHandler(editor, (_, args) =>
         {
-            if (!editor.IsPreviewMode && ContainsClipboardImage(args.SourceDataObject) && PasteImages()) args.CancelCommand();
+            if (editor.IsPreviewMode) return;
+            if (ContainsClipboardImage(args.SourceDataObject))
+            {
+                if (PasteImages()) args.CancelCommand();
+                return;
+            }
+            if (args.IsDragDrop) return;
+
+            string? text;
+            try
+            {
+                text = args.DataObject.GetData(DataFormats.UnicodeText) as string ?? args.DataObject.GetData(DataFormats.Text) as string;
+            }
+            catch (Exception exception) when (exception is COMException or OutOfMemoryException) { return; }
+            if (editor.TryPasteLink(text)) args.CancelCommand();
         });
         editor.PreviewKeyDown += (_, args) =>
         {
